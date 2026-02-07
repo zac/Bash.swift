@@ -412,6 +412,86 @@ struct SessionIntegrationTests {
         #expect(sedGlobal.stdoutString == "bar bar\n")
     }
 
+    @Test("grep and rg high-value flags")
+    func grepAndRgHighValueFlags() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p corpus .hidden")
+        _ = await session.run("printf 'hello\\nhello world\\nnope\\n' > corpus/a.txt")
+        _ = await session.run("printf 'needle\\nHELLO\\n' > corpus/b.md")
+        _ = await session.run("printf 'hello\\n' > corpus/code.swift")
+        _ = await session.run("printf 'secret hello\\n' > .hidden/secret.txt")
+        _ = await session.run("printf 'hello\\nneedle\\n' > patterns.txt")
+
+        let grepRegex = await session.run("grep -E 'h.llo' corpus/a.txt")
+        #expect(grepRegex.exitCode == 0)
+        #expect(grepRegex.stdoutString.contains("hello\n"))
+
+        let grepFixed = await session.run("grep -F 'h.llo' corpus/a.txt")
+        #expect(grepFixed.exitCode == 1)
+
+        let grepOnly = await session.run("grep -o -n 'hello' corpus/a.txt")
+        #expect(grepOnly.exitCode == 0)
+        #expect(grepOnly.stdoutString == "1:hello\n2:hello\n")
+
+        let grepCount = await session.run("grep -c hello corpus/a.txt")
+        #expect(grepCount.exitCode == 0)
+        #expect(grepCount.stdoutString == "2\n")
+
+        let grepFilesWithMatch = await session.run("grep -l hello corpus/a.txt corpus/b.md")
+        #expect(grepFilesWithMatch.exitCode == 0)
+        #expect(grepFilesWithMatch.stdoutString == "corpus/a.txt\n")
+
+        let grepFilesWithoutMatch = await session.run("grep -L hello corpus/a.txt corpus/b.md")
+        #expect(grepFilesWithoutMatch.exitCode == 0)
+        #expect(grepFilesWithoutMatch.stdoutString == "corpus/b.md\n")
+
+        let grepWholeLine = await session.run("grep -x hello corpus/a.txt")
+        #expect(grepWholeLine.exitCode == 0)
+        #expect(grepWholeLine.stdoutString == "hello\n")
+
+        let grepRecursive = await session.run("grep -r hello corpus")
+        #expect(grepRecursive.exitCode == 0)
+        #expect(grepRecursive.stdoutString.contains("/home/user/corpus/a.txt:hello"))
+        #expect(grepRecursive.stdoutString.contains("/home/user/corpus/code.swift:hello"))
+
+        let grepDirectoryError = await session.run("grep hello corpus")
+        #expect(grepDirectoryError.exitCode == 2)
+        #expect(grepDirectoryError.stderrString.contains("is a directory"))
+
+        let rgPatternFiles = await session.run("rg -f patterns.txt -m 1 corpus/a.txt")
+        #expect(rgPatternFiles.exitCode == 0)
+        #expect(rgPatternFiles.stdoutString == "corpus/a.txt:hello\n")
+
+        let rgWord = await session.run("rg -w hello corpus/a.txt")
+        #expect(rgWord.exitCode == 0)
+        #expect(rgWord.stdoutString.contains("corpus/a.txt:hello\n"))
+        #expect(rgWord.stdoutString.contains("corpus/a.txt:hello world\n"))
+
+        let rgLine = await session.run("rg -x hello corpus/a.txt")
+        #expect(rgLine.exitCode == 0)
+        #expect(rgLine.stdoutString == "corpus/a.txt:hello\n")
+
+        let rgHiddenDefault = await session.run("rg hello .")
+        #expect(rgHiddenDefault.exitCode == 0)
+        #expect(!rgHiddenDefault.stdoutString.contains("/home/user/.hidden/secret.txt"))
+
+        let rgNoIgnore = await session.run("rg --no-ignore hello .")
+        #expect(rgNoIgnore.exitCode == 0)
+        #expect(rgNoIgnore.stdoutString.contains("/home/user/.hidden/secret.txt:secret hello"))
+
+        let rgTypeInclude = await session.run("rg hello -t swift corpus")
+        #expect(rgTypeInclude.exitCode == 0)
+        #expect(rgTypeInclude.stdoutString.contains("/home/user/corpus/code.swift:hello"))
+        #expect(!rgTypeInclude.stdoutString.contains("/home/user/corpus/a.txt:"))
+
+        let rgTypeExclude = await session.run("rg hello -T swift corpus")
+        #expect(rgTypeExclude.exitCode == 0)
+        #expect(!rgTypeExclude.stdoutString.contains("/home/user/corpus/code.swift:"))
+        #expect(rgTypeExclude.stdoutString.contains("/home/user/corpus/a.txt:hello"))
+    }
+
     @Test("gzip gunzip zcat zip unzip and tar commands")
     func gzipGunzipZcatZipUnzipAndTarCommands() async throws {
         let (session, root) = try await TestSupport.makeSession()

@@ -227,8 +227,8 @@ All implemented commands support `--help`.
 
 | Command | Supported Options |
 | --- | --- |
-| `grep` | `-i`, `-v`, `-n` (`egrep`, `fgrep` aliases) |
-| `rg` | `-i`, `-n`, `-l`; `<pattern> [paths...]` |
+| `grep` | `-E`, `-F`, `-i`, `-v`, `-n`, `-c`, `-l`, `-L`, `-o`, `-w`, `-x`, `-r`, `-e <pattern>`, `-f <file>` (`egrep`, `fgrep` aliases) |
+| `rg` | `-i`, `-S`, `-F`, `-n`, `-l`, `-c`, `-m <num>`, `-w`, `-x`, `-A/-B/-C`, `--hidden`, `--no-ignore`, `--files`, `-e <pattern>`, `-f <file>`, `-g/--glob`, `-t <type>`, `-T <type>` |
 | `head` | `-n`, `--n`, `-c`, `-q`, `-v` |
 | `tail` | `-n`, `--n` (supports `+N`), `-c`, `-q`, `-v` |
 | `wc` | `-l`, `-w`, `-c`, `-m`, `--chars` |

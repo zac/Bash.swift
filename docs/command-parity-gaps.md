@@ -83,13 +83,13 @@ Source references: `cat`, `cp`, `ln`, `ls`, `mkdir`, `mv`, `readlink`, `rm`, `rm
 
 Source references: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `printf`, `base64`, `md5sum`, `sha1sum`, `sha256sum`.
 
-- `grep` (`P0`)  
-  Gap: currently substring match only; lacks real regex and major flags (`-E/-F/-c/-l/-L/-o/-w/-x/-r`, context flags).  
-  Plan: move to a shared match engine using Swift Regex / `NSRegularExpression` plus fixed-string and recursive modes.
+- `grep` (`P1`)  
+  Gap: now supports regex/fixed modes and major flags (`-E/-F/-c/-l/-L/-o/-w/-x/-r`, `-e/-f`, aliases). Remaining gaps are mainly context-grouping/output polish and deeper GNU compatibility edges.
+  Plan: add context flags (`-A/-B/-C`) and align output separators/exit nuances for edge cases.
 
-- `rg` (`P0`)  
-  Gap: broad feature gap vs ripgrep-like behavior (pattern files, type filters, no-ignore modes, max-count, output modes, stats, JSON/vimgrep).  
-  Plan: keep current core; add high-value subset for LLM workflows: `-e/-f/-m/-w/-x/--no-ignore/-t/-T` and better file filtering first.
+- `rg` (`P1`)  
+  Gap: high-value subset now implemented (`-e/-f/-m/-w/-x/--no-ignore/-t/-T` plus existing context/glob/file listing flags). Remaining gaps are advanced output modes/stats/config parity (`--json`, vimgrep, stats, richer ignore/type ecosystems).
+  Plan: add structured output modes (`--json`, `--vimgrep`) and richer ignore/type metadata incrementally.
 
 - `head` (`Done: 2026-02-07`)  
   Gap closed for v1 target: supports `-q/-v` header behavior and byte/line modes.
@@ -269,8 +269,8 @@ Source references: `clear`, `date`, `history`, `seq`, `sleep`, `time`, `timeout`
 
 ## Closure Roadmap (Dependency-Light)
 
-1. `P0` engine gaps: `jq`, `yq`, `xan`, `grep`, `rg`, `awk`, `sed`, `find`, `cp/mv` multi-source, `file`.
-2. `P1` high-utility flags: `touch`, `tar`, `env`, `date`, `timeout`, `time`, plus remaining advanced `sort/tr` semantics.
+1. `P0` engine gaps: `jq`, `yq`, `xan`, `awk`, `sed`, `find`, `cp/mv` multi-source, `file`.
+2. `P1` high-utility flags: `touch`, `tar`, `env`, `date`, `timeout`, `time`, plus remaining advanced `sort/tr` semantics and `grep/rg` output-mode parity.
 3. `P2` polish/output parity: formatting consistency, extra flags, minor exit-code edge behavior.
 
 ## Test Expectations Per Gap
