@@ -373,4 +373,46 @@ struct SessionIntegrationTests {
         #expect(extractedZip.exitCode == 0)
         #expect(extractedZip.stdoutString == "two\n")
     }
+
+    @Test("jq yq and xan commands")
+    func jqYqAndXanCommands() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let jqRaw = await session.run("printf '{\"user\":{\"name\":\"zac\",\"roles\":[\"dev\",\"ops\"]}}' | jq -r '.user.name'")
+        #expect(jqRaw.exitCode == 0)
+        #expect(jqRaw.stdoutString == "zac\n")
+
+        let jqArray = await session.run("printf '{\"user\":{\"roles\":[\"dev\",\"ops\"]}}' | jq '.user.roles[]'")
+        #expect(jqArray.exitCode == 0)
+        #expect(jqArray.stdoutString.contains("\"dev\""))
+        #expect(jqArray.stdoutString.contains("\"ops\""))
+
+        let yqValue = await session.run("printf 'app:\\n  name: Bash\\n  ports:\\n    - 8080\\n    - 9090\\n' | yq '.app.ports[1]'")
+        #expect(yqValue.exitCode == 0)
+        #expect(yqValue.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == "9090")
+
+        let yqRaw = await session.run("printf 'app:\\n  name: Bash\\n' | yq -r '.app.name'")
+        #expect(yqRaw.exitCode == 0)
+        #expect(yqRaw.stdoutString == "Bash\n")
+
+        _ = await session.run("printf 'name,age,city\\nalice,30,LA\\nbob,25,SF\\n' > people.csv")
+
+        let xanCount = await session.run("xan count people.csv")
+        #expect(xanCount.exitCode == 0)
+        #expect(xanCount.stdoutString == "2\n")
+
+        let xanHeaders = await session.run("xan headers people.csv")
+        #expect(xanHeaders.exitCode == 0)
+        #expect(xanHeaders.stdoutString.contains("1,name\n"))
+        #expect(xanHeaders.stdoutString.contains("3,city\n"))
+
+        let xanSelect = await session.run("xan select name,city people.csv")
+        #expect(xanSelect.exitCode == 0)
+        #expect(xanSelect.stdoutString == "name,city\nalice,LA\nbob,SF\n")
+
+        let xanFilter = await session.run("xan filter city SF people.csv")
+        #expect(xanFilter.exitCode == 0)
+        #expect(xanFilter.stdoutString == "name,age,city\nbob,25,SF\n")
+    }
 }

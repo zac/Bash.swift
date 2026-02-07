@@ -138,6 +138,11 @@ Execution pipeline:
 - `for/while/until`
 - Shell functions and `local`
 
+## Command Parity Tracker
+
+To track command-level gaps versus `just-bash` and the recommended dependency-light closure approach, see:
+- `docs/command-parity-gaps.md`
+
 ## Filesystem Model
 
 Built-in filesystem options:
@@ -239,6 +244,14 @@ All implemented commands support `--help`.
 | `sha1sum` | optional files (or stdin) |
 | `md5sum` | optional files (or stdin) |
 
+### Data Processing
+
+| Command | Supported Options |
+| --- | --- |
+| `jq` | `-r`, `-c`; query + optional files |
+| `yq` | `-r`, `-c`; query + optional files (YAML + JSON input) |
+| `xan` | subcommands: `count`, `headers`, `select`, `filter` |
+
 ### Compression & Archives
 
 | Command | Supported Options |
@@ -302,11 +315,11 @@ The project currently includes parser, filesystem, integration, and command cove
 ## Roadmap
 
 ### Priority (next)
-1. `jq`, `yq`, `xan`
-2. `curl`
-3. `xargs`
+1. `curl`
+2. `xargs`
+3. `html-to-markdown`
 
 ### Deferred for later milestones
-- `jq`, `yq`, `xan`, `sqlite3`, `python`, `python3`
+- `sqlite3`, `python`, `python3`
 - `curl`, `html-to-markdown`
 - `xargs`

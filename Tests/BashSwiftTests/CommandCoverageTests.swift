@@ -8,6 +8,7 @@ struct CommandCoverageTests {
         "cat", "cp", "ln", "ls", "mkdir", "mv", "readlink", "rm", "rmdir", "stat", "touch", "chmod", "file", "tree", "diff",
         "grep", "egrep", "fgrep", "rg", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "awk", "sed", "printf", "base64", "sha256sum", "sha1sum", "md5sum",
         "gzip", "gunzip", "zcat", "zip", "unzip", "tar",
+        "jq", "yq", "xan",
         "basename", "cd", "dirname", "du", "echo", "env", "export", "find", "printenv", "pwd", "tee",
         "clear", "date", "hostname", "false", "whoami", "help", "history", "seq", "sleep", "time", "timeout", "true", "which",
     ]

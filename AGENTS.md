@@ -105,6 +105,10 @@ Compression/archive commands:
 - `Sources/BashSwift/Commands/CompressionCommands.swift`
   - `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 
+Data processing commands:
+- `Sources/BashSwift/Commands/DataCommands.swift`
+  - `jq`, `yq`, `xan`
+
 Navigation/environment commands:
 - `Sources/BashSwift/Commands/NavigationCommands.swift`
   - `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`
@@ -172,6 +176,15 @@ Coverage style:
 
 Run:
 - `swift test`
+
+## Parity Tracking
+
+Command parity gaps vs `just-bash` are tracked in:
+- `docs/command-parity-gaps.md`
+
+When you add or upgrade command behavior:
+1. Update the relevant command entry in `docs/command-parity-gaps.md`.
+2. Lower the command priority only after tests are added for the newly closed gap.
 
 ## Contributor Rules of Thumb
 
