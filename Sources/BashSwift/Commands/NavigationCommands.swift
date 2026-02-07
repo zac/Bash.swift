@@ -205,106 +205,766 @@ struct ExportCommand: BuiltinCommand {
 
 struct FindCommand: BuiltinCommand {
     struct Options: ParsableArguments {
-        @Option(name: .long, help: "Name pattern")
-        var name: String?
-
-        @Option(name: .customLong("type"), help: "Filter by type: f, d, l")
-        var type: String?
-
-        @Option(name: .customLong("path"), help: "Path pattern")
-        var pathPattern: String?
-
-        @Option(name: .customLong("maxdepth"), help: "Descend at most N levels")
-        var maxDepth: Int?
-
-        @Option(name: .customLong("mindepth"), help: "Do not apply tests at levels less than N")
-        var minDepth: Int?
-
-        @Flag(name: .customLong("not"), help: "Negate all tests")
-        var not = false
-
-        @Argument(help: "Path")
-        var path: String = "."
+        @Argument(parsing: .captureForPassthrough, help: "Paths and expression")
+        var values: [String] = []
     }
 
     static let name = "find"
     static let overview = "Search for files in a directory hierarchy"
 
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
-        if let maxDepth = options.maxDepth, maxDepth < 0 {
-            context.writeStderr("find: maxdepth must be >= 0\n")
-            return 1
-        }
-        if let minDepth = options.minDepth, minDepth < 0 {
-            context.writeStderr("find: mindepth must be >= 0\n")
-            return 1
-        }
-        if let type = options.type, !["f", "d", "l"].contains(type) {
-            context.writeStderr("find: unsupported type '\(type)'\n")
-            return 1
+        if options.values == ["--help"] || options.values == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Search for files in a directory hierarchy
+                
+                USAGE: find [path...] [expression]
+                
+                OPTIONS:
+                  -name <pattern>      Match basename with wildcard pattern
+                  -iname <pattern>     Case-insensitive basename match
+                  -path <pattern>      Match full path with wildcard pattern
+                  -ipath <pattern>     Case-insensitive path match
+                  -type <f|d|l>        Filter by file type
+                  -maxdepth <n>        Descend at most n levels
+                  -mindepth <n>        Do not apply tests at levels less than n
+                  -not, !              Negate following expression
+                  -a, -and             Logical AND (default between adjacent tests)
+                  -o, -or              Logical OR
+                  ( ... )              Group expressions
+                  -prune               Do not descend into matching directories
+                  -print               Print matching path
+                  -print0              Print matching path followed by NUL
+                  -exec CMD {} ;       Run command per match
+                  -exec CMD {} +       Run command once with all matches
+                
+                """
+            )
+            return 0
         }
 
-        let root = context.resolvePath(options.path)
-        do {
-            let entries = try await CommandFS.walk(path: root, filesystem: context.filesystem)
-            let rootDepth = PathUtils.splitComponents(root).count
-            for entry in entries {
-                let depth = max(0, PathUtils.splitComponents(entry).count - rootDepth)
-                if let maxDepth = options.maxDepth, depth > maxDepth {
-                    continue
+        let parsedResult = parseInvocation(options.values)
+        let parsed: ParsedFindInvocation
+        switch parsedResult {
+        case let .failure(error):
+            context.writeStderr(error)
+            return 1
+        case let .success(value):
+            parsed = value
+        }
+
+        var runtime = FindRuntime()
+        for rootInput in parsed.roots {
+            let root = context.resolvePath(rootInput)
+            guard await context.filesystem.exists(path: root) else {
+                context.writeStderr("find: \(rootInput): No such file or directory\n")
+                runtime.hadError = true
+                continue
+            }
+
+            await traverse(
+                path: root,
+                depth: 0,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+        }
+
+        await flushBatchExecs(parsed: parsed, context: &context, runtime: &runtime)
+        return runtime.hadError ? 1 : 0
+    }
+
+    private struct ParsedFindInvocation {
+        var roots: [String]
+        var expression: FindExpression?
+        var maxDepth: Int?
+        var minDepth: Int?
+        var useDefaultPrint: Bool
+        var execActions: [ExecAction]
+    }
+
+    private struct ExecAction {
+        var command: [String]
+        var batchMode: Bool
+    }
+
+    private indirect enum FindExpression {
+        case predicate(FindPredicate)
+        case not(FindExpression)
+        case and(FindExpression, FindExpression)
+        case or(FindExpression, FindExpression)
+    }
+
+    private enum FindPredicate {
+        case name(pattern: String, ignoreCase: Bool)
+        case path(pattern: String, ignoreCase: Bool)
+        case type(String)
+        case prune
+        case print
+        case print0
+        case exec(actionIndex: Int)
+    }
+
+    private enum FindToken {
+        case predicate(FindPredicate)
+        case and
+        case or
+        case not
+        case lparen
+        case rparen
+    }
+
+    private struct FindEvalResult {
+        var matches: Bool
+        var shouldPrune: Bool
+    }
+
+    private struct FindRuntime {
+        var pendingBatchExecPaths: [Int: [String]] = [:]
+        var hadError = false
+    }
+
+    private enum ParseOutcome<Value> {
+        case success(Value)
+        case failure(String)
+    }
+
+    private static func parseInvocation(_ args: [String]) -> ParseOutcome<ParsedFindInvocation> {
+        let (roots, expressionArgs) = splitRootsAndExpressionArgs(args)
+
+        var tokens: [FindToken] = []
+        var execActions: [ExecAction] = []
+        var maxDepth: Int?
+        var minDepth: Int?
+
+        var index = 0
+        while index < expressionArgs.count {
+            let arg = expressionArgs[index]
+
+            switch arg {
+            case "-name", "--name":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
                 }
-                if let minDepth = options.minDepth, depth < minDepth {
-                    continue
+                tokens.append(.predicate(.name(pattern: expressionArgs[index + 1], ignoreCase: false)))
+                index += 2
+            case "-iname":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.name(pattern: expressionArgs[index + 1], ignoreCase: true)))
+                index += 2
+            case "-path", "--path":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.path(pattern: expressionArgs[index + 1], ignoreCase: false)))
+                index += 2
+            case "-ipath":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.path(pattern: expressionArgs[index + 1], ignoreCase: true)))
+                index += 2
+            case "-type", "--type":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                let type = expressionArgs[index + 1]
+                guard ["f", "d", "l"].contains(type) else {
+                    return .failure("find: unknown argument to -type: \(type)\n")
+                }
+                tokens.append(.predicate(.type(type)))
+                index += 2
+            case "-maxdepth", "--maxdepth":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                guard let depth = Int(expressionArgs[index + 1]), depth >= 0 else {
+                    return .failure("find: maxdepth must be >= 0\n")
+                }
+                maxDepth = depth
+                index += 2
+            case "-mindepth", "--mindepth":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                guard let depth = Int(expressionArgs[index + 1]), depth >= 0 else {
+                    return .failure("find: mindepth must be >= 0\n")
+                }
+                minDepth = depth
+                index += 2
+            case "-a", "-and":
+                tokens.append(.and)
+                index += 1
+            case "-o", "-or":
+                tokens.append(.or)
+                index += 1
+            case "-not", "--not", "!":
+                tokens.append(.not)
+                index += 1
+            case "(", "\\(":
+                tokens.append(.lparen)
+                index += 1
+            case ")", "\\)":
+                tokens.append(.rparen)
+                index += 1
+            case "-prune":
+                tokens.append(.predicate(.prune))
+                index += 1
+            case "-print":
+                tokens.append(.predicate(.print))
+                index += 1
+            case "-print0":
+                tokens.append(.predicate(.print0))
+                index += 1
+            case "-exec":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '-exec'\n")
+                }
+                index += 1
+
+                var command: [String] = []
+                var terminator: String?
+                while index < expressionArgs.count {
+                    let token = expressionArgs[index]
+                    if token == ";" || token == "\\;" || token == "+" {
+                        terminator = token
+                        break
+                    }
+                    command.append(token)
+                    index += 1
                 }
 
-                let info = try await context.filesystem.stat(path: entry)
-                let matches = try match(entry: entry, info: info, options: options)
-                let shouldInclude = options.not ? !matches : matches
-                if shouldInclude {
-                    context.writeStdout("\(entry)\n")
+                guard let terminator else {
+                    return .failure("find: missing argument to `-exec'\n")
+                }
+                guard !command.isEmpty else {
+                    return .failure("find: missing command for -exec\n")
+                }
+
+                let actionIndex = execActions.count
+                execActions.append(ExecAction(command: command, batchMode: terminator == "+"))
+                tokens.append(.predicate(.exec(actionIndex: actionIndex)))
+                index += 1
+            default:
+                if arg.hasPrefix("-") {
+                    return .failure("find: unknown predicate '\(arg)'\n")
+                }
+
+                // Some users place path operands after -maxdepth/-mindepth before tests.
+                // Ignore those only while no expression token exists yet.
+                if tokens.isEmpty {
+                    index += 1
+                } else {
+                    return .failure("find: paths must precede expression: \(arg)\n")
                 }
             }
-            return 0
-        } catch {
-            context.writeStderr("find: \(error)\n")
-            return 1
+        }
+
+        let expressionResult = parseExpression(tokens: tokens)
+        let expression: FindExpression?
+        switch expressionResult {
+        case let .failure(error):
+            return .failure(error)
+        case let .success(value):
+            expression = value
+        }
+
+        let useDefaultPrint = !containsExplicitOutput(expression)
+        return .success(
+            ParsedFindInvocation(
+                roots: roots,
+                expression: expression,
+                maxDepth: maxDepth,
+                minDepth: minDepth,
+                useDefaultPrint: useDefaultPrint,
+                execActions: execActions
+            )
+        )
+    }
+
+    private static func splitRootsAndExpressionArgs(_ args: [String]) -> (roots: [String], expressionArgs: [String]) {
+        var roots: [String] = []
+        var expressionStart = 0
+
+        while expressionStart < args.count {
+            let arg = args[expressionStart]
+            if isExpressionStartToken(arg) {
+                break
+            }
+            roots.append(arg)
+            expressionStart += 1
+        }
+
+        if roots.isEmpty {
+            roots = ["."]
+        }
+
+        return (roots, Array(args.dropFirst(expressionStart)))
+    }
+
+    private static func isExpressionStartToken(_ token: String) -> Bool {
+        if token == "!" || token == "(" || token == ")" || token == "\\(" || token == "\\)" {
+            return true
+        }
+        return token.hasPrefix("-")
+    }
+
+    private static func parseExpression(tokens: [FindToken]) -> ParseOutcome<FindExpression?> {
+        guard !tokens.isEmpty else {
+            return .success(nil)
+        }
+
+        var index = 0
+        var error: String?
+
+        func parsePrimary() -> FindExpression? {
+            guard index < tokens.count else {
+                error = "find: unexpected end of expression\n"
+                return nil
+            }
+
+            let token = tokens[index]
+            switch token {
+            case let .predicate(predicate):
+                index += 1
+                return .predicate(predicate)
+            case .lparen:
+                index += 1
+                guard let nested = parseOr() else {
+                    return nil
+                }
+                guard index < tokens.count else {
+                    error = "find: missing ')'\n"
+                    return nil
+                }
+                guard case .rparen = tokens[index] else {
+                    error = "find: missing ')'\n"
+                    return nil
+                }
+                index += 1
+                return nested
+            case .rparen:
+                error = "find: unexpected ')'\n"
+                return nil
+            case .and:
+                error = "find: unexpected operator '-a'\n"
+                return nil
+            case .or:
+                error = "find: unexpected operator '-o'\n"
+                return nil
+            case .not:
+                error = "find: unexpected operator '!'\n"
+                return nil
+            }
+        }
+
+        func parseNot() -> FindExpression? {
+            guard index < tokens.count else {
+                return nil
+            }
+
+            if case .not = tokens[index] {
+                index += 1
+                guard let inner = parseNot() else {
+                    if error == nil {
+                        error = "find: missing expression after '!'\n"
+                    }
+                    return nil
+                }
+                return .not(inner)
+            }
+
+            return parsePrimary()
+        }
+
+        func tokenStartsImplicitAnd(_ token: FindToken) -> Bool {
+            switch token {
+            case .predicate, .not, .lparen:
+                return true
+            case .and, .or, .rparen:
+                return false
+            }
+        }
+
+        func parseAnd() -> FindExpression? {
+            guard var left = parseNot() else {
+                return nil
+            }
+
+            while index < tokens.count {
+                let token = tokens[index]
+                switch token {
+                case .and:
+                    index += 1
+                    guard let right = parseNot() else {
+                        if error == nil {
+                            error = "find: missing expression after '-a'\n"
+                        }
+                        return nil
+                    }
+                    left = .and(left, right)
+                case .predicate, .not, .lparen:
+                    guard let right = parseNot() else {
+                        return nil
+                    }
+                    left = .and(left, right)
+                case .or, .rparen:
+                    return left
+                }
+            }
+
+            return left
+        }
+
+        func parseOr() -> FindExpression? {
+            guard var left = parseAnd() else {
+                return nil
+            }
+
+            while index < tokens.count {
+                let token = tokens[index]
+                guard case .or = token else {
+                    break
+                }
+
+                index += 1
+                guard let right = parseAnd() else {
+                    if error == nil {
+                        error = "find: missing expression after '-o'\n"
+                    }
+                    return nil
+                }
+                left = .or(left, right)
+            }
+
+            return left
+        }
+
+        guard let expression = parseOr() else {
+            return .failure(error ?? "find: invalid expression\n")
+        }
+
+        if let error {
+            return .failure(error)
+        }
+
+        if index < tokens.count {
+            if case .rparen = tokens[index] {
+                return .failure("find: unexpected ')'\n")
+            }
+            return .failure("find: invalid trailing expression\n")
+        }
+
+        return .success(expression)
+    }
+
+    private static func containsExplicitOutput(_ expression: FindExpression?) -> Bool {
+        guard let expression else {
+            return false
+        }
+
+        switch expression {
+        case let .predicate(predicate):
+            switch predicate {
+            case .print, .print0, .exec:
+                return true
+            case .name, .path, .type, .prune:
+                return false
+            }
+        case let .not(inner):
+            return containsExplicitOutput(inner)
+        case let .and(lhs, rhs), let .or(lhs, rhs):
+            return containsExplicitOutput(lhs) || containsExplicitOutput(rhs)
         }
     }
 
-    private static func match(entry: String, info: FileInfo, options: Options) throws -> Bool {
-        if let pattern = options.name {
-            let base = PathUtils.basename(entry)
-            guard CommandFS.wildcardMatch(pattern: pattern, value: base) else {
-                return false
+    private static func traverse(
+        path: String,
+        depth: Int,
+        parsed: ParsedFindInvocation,
+        context: inout CommandContext,
+        runtime: inout FindRuntime
+    ) async {
+        let info: FileInfo
+        do {
+            info = try await context.filesystem.stat(path: path)
+        } catch {
+            context.writeStderr("find: \(path): \(error)\n")
+            runtime.hadError = true
+            return
+        }
+
+        var shouldPrune = false
+        if parsed.minDepth == nil || depth >= parsed.minDepth! {
+            let evalResult: FindEvalResult
+            if let expression = parsed.expression {
+                evalResult = await evaluate(
+                    expression,
+                    path: path,
+                    info: info,
+                    parsed: parsed,
+                    context: &context,
+                    runtime: &runtime
+                )
+            } else {
+                evalResult = FindEvalResult(matches: true, shouldPrune: false)
+            }
+
+            shouldPrune = evalResult.shouldPrune
+            if evalResult.matches, parsed.useDefaultPrint {
+                context.writeStdout("\(path)\n")
             }
         }
 
-        if let pathPattern = options.pathPattern {
-            guard CommandFS.wildcardMatch(pattern: pathPattern, value: entry) else {
-                return false
-            }
+        guard info.isDirectory else {
+            return
         }
 
-        if let type = options.type {
+        if let maxDepth = parsed.maxDepth, depth >= maxDepth {
+            return
+        }
+        if shouldPrune {
+            return
+        }
+
+        let children: [DirectoryEntry]
+        do {
+            children = try await context.filesystem.listDirectory(path: path)
+        } catch {
+            context.writeStderr("find: \(path): \(error)\n")
+            runtime.hadError = true
+            return
+        }
+
+        for child in children.sorted(by: { $0.name < $1.name }) {
+            await traverse(
+                path: PathUtils.join(path, child.name),
+                depth: depth + 1,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+        }
+    }
+
+    private static func evaluate(
+        _ expression: FindExpression,
+        path: String,
+        info: FileInfo,
+        parsed: ParsedFindInvocation,
+        context: inout CommandContext,
+        runtime: inout FindRuntime
+    ) async -> FindEvalResult {
+        switch expression {
+        case let .predicate(predicate):
+            return await evaluatePredicate(
+                predicate,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+        case let .not(inner):
+            let result = await evaluate(
+                inner,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+            return FindEvalResult(matches: !result.matches, shouldPrune: result.shouldPrune)
+        case let .and(lhs, rhs):
+            let leftResult = await evaluate(
+                lhs,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+            guard leftResult.matches else {
+                return FindEvalResult(matches: false, shouldPrune: leftResult.shouldPrune)
+            }
+
+            let rightResult = await evaluate(
+                rhs,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+            return FindEvalResult(
+                matches: rightResult.matches,
+                shouldPrune: leftResult.shouldPrune || rightResult.shouldPrune
+            )
+        case let .or(lhs, rhs):
+            let leftResult = await evaluate(
+                lhs,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+            if leftResult.matches {
+                return leftResult
+            }
+
+            let rightResult = await evaluate(
+                rhs,
+                path: path,
+                info: info,
+                parsed: parsed,
+                context: &context,
+                runtime: &runtime
+            )
+            return FindEvalResult(
+                matches: rightResult.matches,
+                shouldPrune: leftResult.shouldPrune || rightResult.shouldPrune
+            )
+        }
+    }
+
+    private static func evaluatePredicate(
+        _ predicate: FindPredicate,
+        path: String,
+        info: FileInfo,
+        parsed: ParsedFindInvocation,
+        context: inout CommandContext,
+        runtime: inout FindRuntime
+    ) async -> FindEvalResult {
+        switch predicate {
+        case let .name(pattern, ignoreCase):
+            let base = PathUtils.basename(path)
+            return FindEvalResult(
+                matches: wildcardMatches(pattern: pattern, value: base, ignoreCase: ignoreCase),
+                shouldPrune: false
+            )
+        case let .path(pattern, ignoreCase):
+            return FindEvalResult(
+                matches: wildcardMatches(pattern: pattern, value: path, ignoreCase: ignoreCase),
+                shouldPrune: false
+            )
+        case let .type(type):
             switch type {
             case "f":
-                if info.isDirectory || info.isSymbolicLink {
-                    return false
-                }
+                return FindEvalResult(matches: !info.isDirectory && !info.isSymbolicLink, shouldPrune: false)
             case "d":
-                if !info.isDirectory {
-                    return false
-                }
+                return FindEvalResult(matches: info.isDirectory, shouldPrune: false)
             case "l":
-                if !info.isSymbolicLink {
-                    return false
-                }
+                return FindEvalResult(matches: info.isSymbolicLink, shouldPrune: false)
             default:
-                throw ShellError.unsupported("unsupported type")
+                return FindEvalResult(matches: false, shouldPrune: false)
+            }
+        case .prune:
+            return FindEvalResult(matches: true, shouldPrune: true)
+        case .print:
+            context.writeStdout("\(path)\n")
+            return FindEvalResult(matches: true, shouldPrune: false)
+        case .print0:
+            context.stdout.append(Data(path.utf8))
+            context.stdout.append(Data([0]))
+            return FindEvalResult(matches: true, shouldPrune: false)
+        case let .exec(actionIndex):
+            guard actionIndex < parsed.execActions.count else {
+                runtime.hadError = true
+                context.writeStderr("find: invalid -exec action\n")
+                return FindEvalResult(matches: false, shouldPrune: false)
+            }
+
+            let action = parsed.execActions[actionIndex]
+            if action.batchMode {
+                runtime.pendingBatchExecPaths[actionIndex, default: []].append(path)
+                return FindEvalResult(matches: true, shouldPrune: false)
+            }
+
+            let argv = expandExecCommandSingle(action.command, path: path)
+            let subcommand = await context.runSubcommandIsolated(argv, stdin: Data())
+            context.stdout.append(subcommand.result.stdout)
+            context.stderr.append(subcommand.result.stderr)
+            if subcommand.result.exitCode != 0 {
+                runtime.hadError = true
+            }
+            return FindEvalResult(matches: subcommand.result.exitCode == 0, shouldPrune: false)
+        }
+    }
+
+    private static func flushBatchExecs(
+        parsed: ParsedFindInvocation,
+        context: inout CommandContext,
+        runtime: inout FindRuntime
+    ) async {
+        for actionIndex in runtime.pendingBatchExecPaths.keys.sorted() {
+            guard actionIndex < parsed.execActions.count else {
+                runtime.hadError = true
+                continue
+            }
+            let paths = runtime.pendingBatchExecPaths[actionIndex] ?? []
+            guard !paths.isEmpty else {
+                continue
+            }
+
+            let action = parsed.execActions[actionIndex]
+            let argv = expandExecCommandBatch(action.command, paths: paths)
+            let subcommand = await context.runSubcommandIsolated(argv, stdin: Data())
+            context.stdout.append(subcommand.result.stdout)
+            context.stderr.append(subcommand.result.stderr)
+            if subcommand.result.exitCode != 0 {
+                runtime.hadError = true
             }
         }
+    }
 
-        return true
+    private static func expandExecCommandSingle(_ command: [String], path: String) -> [String] {
+        command.map { token in
+            token.replacingOccurrences(of: "{}", with: path)
+        }
+    }
+
+    private static func expandExecCommandBatch(_ command: [String], paths: [String]) -> [String] {
+        var expanded: [String] = []
+        var replacedAnyPlaceholder = false
+
+        for token in command {
+            if token == "{}" {
+                replacedAnyPlaceholder = true
+                expanded.append(contentsOf: paths)
+                continue
+            }
+
+            if token.contains("{}") {
+                replacedAnyPlaceholder = true
+                for path in paths {
+                    expanded.append(token.replacingOccurrences(of: "{}", with: path))
+                }
+                continue
+            }
+
+            expanded.append(token)
+        }
+
+        if !replacedAnyPlaceholder {
+            expanded.append(contentsOf: paths)
+        }
+
+        return expanded
+    }
+
+    private static func wildcardMatches(pattern: String, value: String, ignoreCase: Bool) -> Bool {
+        if ignoreCase {
+            return CommandFS.wildcardMatch(
+                pattern: pattern.lowercased(),
+                value: value.lowercased()
+            )
+        }
+
+        return CommandFS.wildcardMatch(pattern: pattern, value: value)
     }
 }
 

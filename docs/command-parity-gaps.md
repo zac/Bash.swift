@@ -206,9 +206,9 @@ Shell builtins in `just-bash` handle `cd`, `export`, `pwd`.
   Gap: missing common forms (`-p` style output parity, stricter identifier validation).  
   Plan: validate identifiers and align printed format.
 
-- `find` (`P0`)  
-  Gap: very small subset vs expression engine in `just-bash`; missing many predicates/actions (`-iname`, regex, size/perm/time, `-exec`, `-print0`, `-printf`, `-delete`, `-prune`, boolean operators).  
-  Plan: build a small expression parser + evaluator incrementally; add `-exec` and `-print0` early for LLM scripts.
+- `find` (`P1`)  
+  Gap narrowed: now supports boolean expression parsing (`-a/-o/!` + parentheses), `-prune`, `-print0`, and `-exec ... \;` / `-exec ... +` with short-circuit evaluation. Remaining gaps are advanced predicates/actions (`-regex/-iregex`, `-size`, `-mtime`, `-perm`, `-newer`, `-empty`, `-printf`, `-delete`, `-depth`) and deeper GNU error/exit nuances.  
+  Plan: next slice should add metadata predicates (`-size`, `-mtime`, `-perm`) and `-regex` first, then output/deletion actions (`-printf`, `-delete`) while preserving internal implementation.
 
 - `printenv` (`Done: 2026-02-07`)  
   Gap closed for v1 target: returns non-zero when any requested key is missing.

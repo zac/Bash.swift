@@ -274,7 +274,7 @@ All implemented commands support `--help`.
 | `echo` | `-n` |
 | `env` | none |
 | `export` | positional `KEY=VALUE` assignments |
-| `find` | `--name <pattern>`, optional path |
+| `find` | paths + expression subset: `-name/-iname`, `-path/-ipath`, `-type`, `-maxdepth/-mindepth`, `-a/-o/!` with grouping `(...)`, `-prune`, `-print/-print0`, `-exec ... \\;` / `-exec ... +` |
 | `hostname` | none |
 | `printenv` | optional positional keys (non-zero if any key is missing) |
 | `pwd` | none |
