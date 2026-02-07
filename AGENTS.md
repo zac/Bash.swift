@@ -103,7 +103,7 @@ Formatting/hash commands:
 
 Compression/archive commands:
 - `Sources/BashSwift/Commands/CompressionCommands.swift`
-  - `gzip`, `gunzip`, `zcat`, `tar`
+  - `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 
 Navigation/environment commands:
 - `Sources/BashSwift/Commands/NavigationCommands.swift`

@@ -37,6 +37,8 @@ extension BashSession {
             GzipCommand.self,
             GunzipCommand.self,
             ZcatCommand.self,
+            ZipCommand.self,
+            UnzipCommand.self,
             TarCommand.self,
             BasenameCommand.self,
             CdCommand.self,

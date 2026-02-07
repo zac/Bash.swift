@@ -289,8 +289,8 @@ struct SessionIntegrationTests {
         #expect(sedGlobal.stdoutString == "bar bar\n")
     }
 
-    @Test("gzip gunzip zcat and tar commands")
-    func gzipGunzipZcatAndTarCommands() async throws {
+    @Test("gzip gunzip zcat zip unzip and tar commands")
+    func gzipGunzipZcatZipUnzipAndTarCommands() async throws {
         let (session, root) = try await TestSupport.makeSession()
         defer { TestSupport.removeDirectory(root) }
 
@@ -346,5 +346,31 @@ struct SessionIntegrationTests {
         let extractedB = await session.run("cat pkg/sub/b.txt")
         #expect(extractedB.exitCode == 0)
         #expect(extractedB.stdoutString == "B\n")
+
+        _ = await session.run("mkdir -p zipdir/sub")
+        _ = await session.run("printf 'one\\n' > zipdir/one.txt")
+        _ = await session.run("printf 'two\\n' > zipdir/sub/two.txt")
+
+        let createZip = await session.run("zip -r bundle.zip zipdir")
+        #expect(createZip.exitCode == 0)
+
+        let listZip = await session.run("unzip -l bundle.zip")
+        #expect(listZip.exitCode == 0)
+        #expect(listZip.stdoutString.contains("zipdir/\n"))
+        #expect(listZip.stdoutString.contains("zipdir/one.txt\n"))
+        #expect(listZip.stdoutString.contains("zipdir/sub/two.txt\n"))
+
+        let printZip = await session.run("unzip -p bundle.zip zipdir/sub/two.txt")
+        #expect(printZip.exitCode == 0)
+        #expect(printZip.stdoutString == "two\n")
+
+        _ = await session.run("rm -r zipdir")
+
+        let extractZip = await session.run("unzip bundle.zip")
+        #expect(extractZip.exitCode == 0)
+
+        let extractedZip = await session.run("cat zipdir/sub/two.txt")
+        #expect(extractedZip.exitCode == 0)
+        #expect(extractedZip.stdoutString == "two\n")
     }
 }

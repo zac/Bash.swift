@@ -246,6 +246,8 @@ All implemented commands support `--help`.
 | `gzip` | `-d`, `--decompress`, `-c`, `-k`, `-f` |
 | `gunzip` | `-c`, `-k`, `-f` |
 | `zcat` | positional files (or stdin) |
+| `zip` | `-r`, `-0`, `--store`; `zip <archive.zip> <paths...>` |
+| `unzip` | `-l`, `-p`, `-o`, `-d <dir>` |
 | `tar` | `-c`, `-x`, `-t`, `-z`, `-f <archive>`, `-C <dir>` |
 
 ### Navigation & Environment
@@ -303,7 +305,6 @@ The project currently includes parser, filesystem, integration, and command cove
 1. `jq`, `yq`, `xan`
 2. `curl`
 3. `xargs`
-4. `zip`, `unzip`
 
 ### Deferred for later milestones
 - `jq`, `yq`, `xan`, `sqlite3`, `python`, `python3`
