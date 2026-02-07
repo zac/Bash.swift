@@ -225,7 +225,12 @@ struct FindCommand: BuiltinCommand {
                   -iname <pattern>     Case-insensitive basename match
                   -path <pattern>      Match full path with wildcard pattern
                   -ipath <pattern>     Case-insensitive path match
+                  -regex <pattern>     Match full path with regular expression
+                  -iregex <pattern>    Case-insensitive regular expression path match
                   -type <f|d|l>        Filter by file type
+                  -mtime <n>           Match file age in days (supports +n, -n)
+                  -size <n[ckMGb]>     Match file size with optional unit
+                  -perm <mode>         Match permissions (supports MODE, -MODE, /MODE)
                   -maxdepth <n>        Descend at most n levels
                   -mindepth <n>        Do not apply tests at levels less than n
                   -not, !              Negate following expression
@@ -235,6 +240,8 @@ struct FindCommand: BuiltinCommand {
                   -prune               Do not descend into matching directories
                   -print               Print matching path
                   -print0              Print matching path followed by NUL
+                  -printf <format>     Print using format directives (%p %P %f %h %s %d %m %%)
+                  -delete              Delete matching entries
                   -exec CMD {} ;       Run command per match
                   -exec CMD {} +       Run command once with all matches
                 
@@ -264,6 +271,7 @@ struct FindCommand: BuiltinCommand {
 
             await traverse(
                 path: root,
+                rootPath: root,
                 depth: 0,
                 parsed: parsed,
                 context: &context,
@@ -272,6 +280,7 @@ struct FindCommand: BuiltinCommand {
         }
 
         await flushBatchExecs(parsed: parsed, context: &context, runtime: &runtime)
+        await flushPendingDirectoryDeletes(context: &context, runtime: &runtime)
         return runtime.hadError ? 1 : 0
     }
 
@@ -299,11 +308,37 @@ struct FindCommand: BuiltinCommand {
     private enum FindPredicate {
         case name(pattern: String, ignoreCase: Bool)
         case path(pattern: String, ignoreCase: Bool)
+        case regex(pattern: String, ignoreCase: Bool)
         case type(String)
+        case mtime(days: Int, comparison: NumericComparison)
+        case size(value: Int, unit: SizeUnit, comparison: NumericComparison)
+        case perm(mode: Int, matchType: PermissionMatchType)
         case prune
         case print
         case print0
+        case printf(format: String)
+        case delete
         case exec(actionIndex: Int)
+    }
+
+    private enum NumericComparison {
+        case exact
+        case more
+        case less
+    }
+
+    private enum SizeUnit {
+        case bytes
+        case kilobytes
+        case megabytes
+        case gigabytes
+        case blocks
+    }
+
+    private enum PermissionMatchType {
+        case exact
+        case all
+        case any
     }
 
     private enum FindToken {
@@ -322,6 +357,7 @@ struct FindCommand: BuiltinCommand {
 
     private struct FindRuntime {
         var pendingBatchExecPaths: [Int: [String]] = [:]
+        var pendingDirectoryDeletes: Set<String> = []
         var hadError = false
     }
 
@@ -367,6 +403,18 @@ struct FindCommand: BuiltinCommand {
                 }
                 tokens.append(.predicate(.path(pattern: expressionArgs[index + 1], ignoreCase: true)))
                 index += 2
+            case "-regex":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.regex(pattern: expressionArgs[index + 1], ignoreCase: false)))
+                index += 2
+            case "-iregex":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.regex(pattern: expressionArgs[index + 1], ignoreCase: true)))
+                index += 2
             case "-type", "--type":
                 guard index + 1 < expressionArgs.count else {
                     return .failure("find: missing argument to '\(arg)'\n")
@@ -376,6 +424,51 @@ struct FindCommand: BuiltinCommand {
                     return .failure("find: unknown argument to -type: \(type)\n")
                 }
                 tokens.append(.predicate(.type(type)))
+                index += 2
+            case "-mtime":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                let parse = parseNumericComparisonToken(expressionArgs[index + 1])
+                guard let days = Int(parse.value), days >= 0 else {
+                    return .failure("find: invalid argument to -mtime: \(expressionArgs[index + 1])\n")
+                }
+                tokens.append(.predicate(.mtime(days: days, comparison: parse.comparison)))
+                index += 2
+            case "-size":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                let token = expressionArgs[index + 1]
+                guard let size = parseSizeToken(token) else {
+                    return .failure("find: invalid argument to -size: \(token)\n")
+                }
+                tokens.append(
+                    .predicate(
+                        .size(
+                            value: size.value,
+                            unit: size.unit,
+                            comparison: size.comparison
+                        )
+                    )
+                )
+                index += 2
+            case "-perm":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                let token = expressionArgs[index + 1]
+                guard let permissions = parsePermissionToken(token) else {
+                    return .failure("find: invalid argument to -perm: \(token)\n")
+                }
+                tokens.append(
+                    .predicate(
+                        .perm(
+                            mode: permissions.mode,
+                            matchType: permissions.matchType
+                        )
+                    )
+                )
                 index += 2
             case "-maxdepth", "--maxdepth":
                 guard index + 1 < expressionArgs.count else {
@@ -418,6 +511,15 @@ struct FindCommand: BuiltinCommand {
                 index += 1
             case "-print0":
                 tokens.append(.predicate(.print0))
+                index += 1
+            case "-printf":
+                guard index + 1 < expressionArgs.count else {
+                    return .failure("find: missing argument to '\(arg)'\n")
+                }
+                tokens.append(.predicate(.printf(format: expressionArgs[index + 1])))
+                index += 2
+            case "-delete":
+                tokens.append(.predicate(.delete))
                 index += 1
             case "-exec":
                 guard index + 1 < expressionArgs.count else {
@@ -669,9 +771,9 @@ struct FindCommand: BuiltinCommand {
         switch expression {
         case let .predicate(predicate):
             switch predicate {
-            case .print, .print0, .exec:
+            case .print, .print0, .printf, .exec, .delete:
                 return true
-            case .name, .path, .type, .prune:
+            case .name, .path, .regex, .type, .mtime, .size, .perm, .prune:
                 return false
             }
         case let .not(inner):
@@ -683,6 +785,7 @@ struct FindCommand: BuiltinCommand {
 
     private static func traverse(
         path: String,
+        rootPath: String,
         depth: Int,
         parsed: ParsedFindInvocation,
         context: inout CommandContext,
@@ -704,7 +807,9 @@ struct FindCommand: BuiltinCommand {
                 evalResult = await evaluate(
                     expression,
                     path: path,
+                    rootPath: rootPath,
                     info: info,
+                    depth: depth,
                     parsed: parsed,
                     context: &context,
                     runtime: &runtime
@@ -742,6 +847,7 @@ struct FindCommand: BuiltinCommand {
         for child in children.sorted(by: { $0.name < $1.name }) {
             await traverse(
                 path: PathUtils.join(path, child.name),
+                rootPath: rootPath,
                 depth: depth + 1,
                 parsed: parsed,
                 context: &context,
@@ -753,7 +859,9 @@ struct FindCommand: BuiltinCommand {
     private static func evaluate(
         _ expression: FindExpression,
         path: String,
+        rootPath: String,
         info: FileInfo,
+        depth: Int,
         parsed: ParsedFindInvocation,
         context: inout CommandContext,
         runtime: inout FindRuntime
@@ -763,7 +871,9 @@ struct FindCommand: BuiltinCommand {
             return await evaluatePredicate(
                 predicate,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -772,7 +882,9 @@ struct FindCommand: BuiltinCommand {
             let result = await evaluate(
                 inner,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -782,7 +894,9 @@ struct FindCommand: BuiltinCommand {
             let leftResult = await evaluate(
                 lhs,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -794,7 +908,9 @@ struct FindCommand: BuiltinCommand {
             let rightResult = await evaluate(
                 rhs,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -807,7 +923,9 @@ struct FindCommand: BuiltinCommand {
             let leftResult = await evaluate(
                 lhs,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -819,7 +937,9 @@ struct FindCommand: BuiltinCommand {
             let rightResult = await evaluate(
                 rhs,
                 path: path,
+                rootPath: rootPath,
                 info: info,
+                depth: depth,
                 parsed: parsed,
                 context: &context,
                 runtime: &runtime
@@ -834,7 +954,9 @@ struct FindCommand: BuiltinCommand {
     private static func evaluatePredicate(
         _ predicate: FindPredicate,
         path: String,
+        rootPath: String,
         info: FileInfo,
+        depth: Int,
         parsed: ParsedFindInvocation,
         context: inout CommandContext,
         runtime: inout FindRuntime
@@ -851,6 +973,11 @@ struct FindCommand: BuiltinCommand {
                 matches: wildcardMatches(pattern: pattern, value: path, ignoreCase: ignoreCase),
                 shouldPrune: false
             )
+        case let .regex(pattern, ignoreCase):
+            return FindEvalResult(
+                matches: regexMatches(pattern: pattern, value: path, ignoreCase: ignoreCase),
+                shouldPrune: false
+            )
         case let .type(type):
             switch type {
             case "f":
@@ -862,6 +989,64 @@ struct FindCommand: BuiltinCommand {
             default:
                 return FindEvalResult(matches: false, shouldPrune: false)
             }
+        case let .mtime(days, comparison):
+            guard let modified = info.modificationDate else {
+                return FindEvalResult(matches: false, shouldPrune: false)
+            }
+            let ageDays = Date().timeIntervalSince(modified) / (60 * 60 * 24)
+            let matches: Bool
+            switch comparison {
+            case .exact:
+                matches = Int(floor(ageDays)) == days
+            case .more:
+                matches = ageDays > Double(days)
+            case .less:
+                matches = ageDays < Double(days)
+            }
+            return FindEvalResult(matches: matches, shouldPrune: false)
+        case let .size(value, unit, comparison):
+            let targetBytes: UInt64
+            switch unit {
+            case .bytes:
+                targetBytes = UInt64(value)
+            case .kilobytes:
+                targetBytes = UInt64(value) * 1_024
+            case .megabytes:
+                targetBytes = UInt64(value) * 1_024 * 1_024
+            case .gigabytes:
+                targetBytes = UInt64(value) * 1_024 * 1_024 * 1_024
+            case .blocks:
+                targetBytes = UInt64(value) * 512
+            }
+
+            let matches: Bool
+            switch comparison {
+            case .exact:
+                if case .blocks = unit {
+                    let blockCount = max(UInt64(1), (info.size + 511) / 512)
+                    matches = blockCount == UInt64(value)
+                } else {
+                    matches = info.size == targetBytes
+                }
+            case .more:
+                matches = info.size > targetBytes
+            case .less:
+                matches = info.size < targetBytes
+            }
+            return FindEvalResult(matches: matches, shouldPrune: false)
+        case let .perm(mode, matchType):
+            let current = info.permissions & 0o777
+            let target = mode & 0o777
+            let matches: Bool
+            switch matchType {
+            case .exact:
+                matches = current == target
+            case .all:
+                matches = (current & target) == target
+            case .any:
+                matches = (current & target) != 0
+            }
+            return FindEvalResult(matches: matches, shouldPrune: false)
         case .prune:
             return FindEvalResult(matches: true, shouldPrune: true)
         case .print:
@@ -871,6 +1056,23 @@ struct FindCommand: BuiltinCommand {
             context.stdout.append(Data(path.utf8))
             context.stdout.append(Data([0]))
             return FindEvalResult(matches: true, shouldPrune: false)
+        case let .printf(format):
+            context.writeStdout(renderPrintf(format: format, path: path, rootPath: rootPath, info: info, depth: depth))
+            return FindEvalResult(matches: true, shouldPrune: false)
+        case .delete:
+            if info.isDirectory {
+                runtime.pendingDirectoryDeletes.insert(path)
+                return FindEvalResult(matches: true, shouldPrune: false)
+            }
+
+            do {
+                try await context.filesystem.remove(path: path, recursive: false)
+                return FindEvalResult(matches: true, shouldPrune: false)
+            } catch {
+                context.writeStderr("find: cannot delete '\(path)': \(error)\n")
+                runtime.hadError = true
+                return FindEvalResult(matches: false, shouldPrune: false)
+            }
         case let .exec(actionIndex):
             guard actionIndex < parsed.execActions.count else {
                 runtime.hadError = true
@@ -892,6 +1094,28 @@ struct FindCommand: BuiltinCommand {
                 runtime.hadError = true
             }
             return FindEvalResult(matches: subcommand.result.exitCode == 0, shouldPrune: false)
+        }
+    }
+
+    private static func flushPendingDirectoryDeletes(
+        context: inout CommandContext,
+        runtime: inout FindRuntime
+    ) async {
+        let ordered = runtime.pendingDirectoryDeletes.sorted {
+            PathUtils.splitComponents($0).count > PathUtils.splitComponents($1).count
+        }
+
+        for path in ordered {
+            guard await context.filesystem.exists(path: path) else {
+                continue
+            }
+
+            do {
+                try await context.filesystem.remove(path: path, recursive: false)
+            } catch {
+                context.writeStderr("find: cannot delete '\(path)': \(error)\n")
+                runtime.hadError = true
+            }
         }
     }
 
@@ -965,6 +1189,205 @@ struct FindCommand: BuiltinCommand {
         }
 
         return CommandFS.wildcardMatch(pattern: pattern, value: value)
+    }
+
+    private static func regexMatches(pattern: String, value: String, ignoreCase: Bool) -> Bool {
+        let options: NSRegularExpression.Options = ignoreCase ? [.caseInsensitive] : []
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: options) else {
+            return false
+        }
+        let range = NSRange(value.startIndex..<value.endIndex, in: value)
+        return regex.firstMatch(in: value, range: range) != nil
+    }
+
+    private static func parseNumericComparisonToken(_ token: String) -> (comparison: NumericComparison, value: String) {
+        if let first = token.first {
+            if first == "+" {
+                return (.more, String(token.dropFirst()))
+            }
+            if first == "-" {
+                return (.less, String(token.dropFirst()))
+            }
+        }
+        return (.exact, token)
+    }
+
+    private static func parseSizeToken(_ token: String) -> (value: Int, unit: SizeUnit, comparison: NumericComparison)? {
+        let parsed = parseNumericComparisonToken(token)
+        guard !parsed.value.isEmpty else {
+            return nil
+        }
+
+        let rawValue = parsed.value
+        let last = rawValue.last ?? " "
+
+        let numberToken: String
+        let unit: SizeUnit
+        switch last {
+        case "c":
+            numberToken = String(rawValue.dropLast())
+            unit = .bytes
+        case "k":
+            numberToken = String(rawValue.dropLast())
+            unit = .kilobytes
+        case "M", "m":
+            numberToken = String(rawValue.dropLast())
+            unit = .megabytes
+        case "G", "g":
+            numberToken = String(rawValue.dropLast())
+            unit = .gigabytes
+        case "b":
+            numberToken = String(rawValue.dropLast())
+            unit = .blocks
+        default:
+            numberToken = rawValue
+            unit = .blocks
+        }
+
+        guard let value = Int(numberToken), value >= 0 else {
+            return nil
+        }
+        return (value, unit, parsed.comparison)
+    }
+
+    private static func parsePermissionToken(_ token: String) -> (mode: Int, matchType: PermissionMatchType)? {
+        guard !token.isEmpty else {
+            return nil
+        }
+
+        let matchType: PermissionMatchType
+        let modeToken: String
+        if token.hasPrefix("-") {
+            matchType = .all
+            modeToken = String(token.dropFirst())
+        } else if token.hasPrefix("/") {
+            matchType = .any
+            modeToken = String(token.dropFirst())
+        } else {
+            matchType = .exact
+            modeToken = token
+        }
+
+        guard !modeToken.isEmpty else {
+            return nil
+        }
+        guard modeToken.allSatisfy({ "01234567".contains($0) }) else {
+            return nil
+        }
+        guard let mode = Int(modeToken, radix: 8) else {
+            return nil
+        }
+        return (mode, matchType)
+    }
+
+    private static func renderPrintf(
+        format: String,
+        path: String,
+        rootPath: String,
+        info: FileInfo,
+        depth: Int
+    ) -> String {
+        let unescaped = unescapePrintf(format)
+        let chars = Array(unescaped)
+        var output = ""
+        var index = 0
+        let mode = String(format: "%03o", info.permissions & 0o777)
+
+        while index < chars.count {
+            let char = chars[index]
+            guard char == "%" else {
+                output.append(char)
+                index += 1
+                continue
+            }
+
+            index += 1
+            guard index < chars.count else {
+                output.append("%")
+                break
+            }
+
+            let spec = chars[index]
+            switch spec {
+            case "%":
+                output.append("%")
+            case "p":
+                output += path
+            case "P":
+                output += relativeToRoot(path: path, rootPath: rootPath)
+            case "f":
+                output += PathUtils.basename(path)
+            case "h":
+                output += PathUtils.dirname(path)
+            case "s":
+                output += String(info.size)
+            case "d":
+                output += String(depth)
+            case "m":
+                output += mode
+            default:
+                output.append("%")
+                output.append(spec)
+            }
+            index += 1
+        }
+
+        return output
+    }
+
+    private static func relativeToRoot(path: String, rootPath: String) -> String {
+        if path == rootPath {
+            return "."
+        }
+
+        if rootPath == "/" {
+            return String(path.drop(while: { $0 == "/" }))
+        }
+
+        let prefix = rootPath + "/"
+        if path.hasPrefix(prefix) {
+            return String(path.dropFirst(prefix.count))
+        }
+
+        return path
+    }
+
+    private static func unescapePrintf(_ input: String) -> String {
+        var output = ""
+        var index = input.startIndex
+
+        while index < input.endIndex {
+            let char = input[index]
+            guard char == "\\" else {
+                output.append(char)
+                index = input.index(after: index)
+                continue
+            }
+
+            let next = input.index(after: index)
+            guard next < input.endIndex else {
+                output.append("\\")
+                break
+            }
+
+            switch input[next] {
+            case "n":
+                output.append("\n")
+            case "t":
+                output.append("\t")
+            case "r":
+                output.append("\r")
+            case "0":
+                output.append("\0")
+            case "\\":
+                output.append("\\")
+            default:
+                output.append(input[next])
+            }
+            index = input.index(after: next)
+        }
+
+        return output
     }
 }
 

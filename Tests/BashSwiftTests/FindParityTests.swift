@@ -112,4 +112,110 @@ struct FindParityTests {
         #expect(result.exitCode != 0)
         #expect(result.stderrString.contains("unknown predicate"))
     }
+
+    @Test("regex and iregex matching")
+    func regexAndIregexMatching() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p regex")
+        _ = await session.run("printf 'a\\n' > regex/one.txt")
+        _ = await session.run("printf 'b\\n' > regex/TWO.TXT")
+        _ = await session.run("printf 'c\\n' > regex/note.md")
+
+        let regex = await session.run("find regex -regex '.*\\.md$'")
+        #expect(regex.exitCode == 0)
+        #expect(regex.stdoutString == "/home/user/regex/note.md\n")
+
+        let iregex = await session.run("find regex -iregex '.*\\.txt$'")
+        #expect(iregex.exitCode == 0)
+        #expect(iregex.stdoutString == "/home/user/regex/TWO.TXT\n/home/user/regex/one.txt\n")
+    }
+
+    @Test("size mtime and perm predicates")
+    func sizeMtimeAndPermPredicates() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p meta")
+        _ = await session.run("printf 'abc\\n' > meta/small.txt")
+        _ = await session.run("printf '1234567890\\n' > meta/big.txt")
+        _ = await session.run("touch meta/old.txt")
+        _ = await session.run("chmod 600 meta/old.txt")
+
+        let oldPhysicalPath = root
+            .appendingPathComponent("home/user/meta", isDirectory: true)
+            .appendingPathComponent("old.txt")
+            .path
+        try FileManager.default.setAttributes(
+            [.modificationDate: Date(timeIntervalSinceNow: -(3 * 24 * 60 * 60))],
+            ofItemAtPath: oldPhysicalPath
+        )
+
+        let size = await session.run("find meta -type f -size +5c")
+        #expect(size.exitCode == 0)
+        #expect(size.stdoutString == "/home/user/meta/big.txt\n")
+
+        let mtime = await session.run("find meta -type f -mtime +1")
+        #expect(mtime.exitCode == 0)
+        #expect(mtime.stdoutString == "/home/user/meta/old.txt\n")
+
+        let perm = await session.run("find meta -type f -perm 600")
+        #expect(perm.exitCode == 0)
+        #expect(perm.stdoutString == "/home/user/meta/old.txt\n")
+    }
+
+    @Test("printf action")
+    func printfAction() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p fmt/nested")
+        _ = await session.run("printf 'hello\\n' > fmt/nested/a.txt")
+
+        let result = await session.run("find fmt -name '*.txt' -printf '%P:%f:%s:%d\\n'")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "nested/a.txt:a.txt:6:2\n")
+    }
+
+    @Test("delete action for files and directories")
+    func deleteActionForFilesAndDirectories() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p trash/empty")
+        _ = await session.run("printf 'temp\\n' > trash/remove.tmp")
+        _ = await session.run("printf 'keep\\n' > trash/keep.txt")
+
+        let deleteFile = await session.run("find trash -name '*.tmp' -delete")
+        #expect(deleteFile.exitCode == 0)
+
+        let afterFileDelete = await session.run("ls trash")
+        #expect(afterFileDelete.exitCode == 0)
+        #expect(afterFileDelete.stdoutString == "empty keep.txt\n")
+
+        let deleteEmptyDir = await session.run("find trash -type d -name empty -delete")
+        #expect(deleteEmptyDir.exitCode == 0)
+
+        let afterDirDelete = await session.run("ls trash")
+        #expect(afterDirDelete.exitCode == 0)
+        #expect(afterDirDelete.stdoutString == "keep.txt\n")
+    }
+
+    @Test("delete action fails for non-empty directory")
+    func deleteActionFailsForNonEmptyDirectory() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p busy/sub")
+        _ = await session.run("printf 'x\\n' > busy/sub/file.txt")
+
+        let delete = await session.run("find busy -type d -name sub -delete")
+        #expect(delete.exitCode != 0)
+        #expect(delete.stderrString.contains("cannot delete"))
+
+        let stillThere = await session.run("ls busy")
+        #expect(stillThere.exitCode == 0)
+        #expect(stillThere.stdoutString == "sub\n")
+    }
 }

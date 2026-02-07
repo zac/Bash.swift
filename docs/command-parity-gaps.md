@@ -207,8 +207,8 @@ Shell builtins in `just-bash` handle `cd`, `export`, `pwd`.
   Plan: validate identifiers and align printed format.
 
 - `find` (`P1`)  
-  Gap narrowed: now supports boolean expression parsing (`-a/-o/!` + parentheses), `-prune`, `-print0`, and `-exec ... \;` / `-exec ... +` with short-circuit evaluation. Remaining gaps are advanced predicates/actions (`-regex/-iregex`, `-size`, `-mtime`, `-perm`, `-newer`, `-empty`, `-printf`, `-delete`, `-depth`) and deeper GNU error/exit nuances.  
-  Plan: next slice should add metadata predicates (`-size`, `-mtime`, `-perm`) and `-regex` first, then output/deletion actions (`-printf`, `-delete`) while preserving internal implementation.
+  Gap narrowed further: now supports boolean expression parsing (`-a/-o/!` + parentheses), `-prune`, `-print0`, `-printf`, `-delete`, metadata predicates (`-regex/-iregex`, `-size`, `-mtime`, `-perm`), and `-exec ... \;` / `-exec ... +` with short-circuit evaluation. Remaining gaps are advanced predicates/actions (`-newer`, `-empty`, `-depth`) plus deeper GNU output/error edge parity.  
+  Plan: next slice should add `-newer` + `-empty`, then `-depth` traversal semantics and output-format nuances.
 
 - `printenv` (`Done: 2026-02-07`)  
   Gap closed for v1 target: returns non-zero when any requested key is missing.
