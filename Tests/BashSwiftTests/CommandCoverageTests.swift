@@ -5,10 +5,10 @@ import Testing
 @Suite("Command Coverage")
 struct CommandCoverageTests {
     private let commands = [
-        "cat", "cp", "ln", "ls", "mkdir", "mv", "readlink", "rm", "rmdir", "stat", "touch",
-        "grep", "egrep", "fgrep", "head", "tail", "wc", "sort", "uniq", "cut", "tr",
+        "cat", "cp", "ln", "ls", "mkdir", "mv", "readlink", "rm", "rmdir", "stat", "touch", "chmod", "file", "tree",
+        "grep", "egrep", "fgrep", "head", "tail", "wc", "sort", "uniq", "cut", "tr", "printf", "base64", "sha256sum", "sha1sum", "md5sum",
         "basename", "cd", "dirname", "du", "echo", "env", "export", "find", "printenv", "pwd", "tee",
-        "clear", "date", "false", "help", "history", "seq", "sleep", "true", "which",
+        "clear", "date", "hostname", "false", "whoami", "help", "history", "seq", "sleep", "time", "timeout", "true", "which",
     ]
 
     @Test("all builtins support --help")
@@ -18,8 +18,11 @@ struct CommandCoverageTests {
 
         for command in commands {
             let result = await session.run("\(command) --help")
-            #expect(result.exitCode == 0)
-            #expect(!result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            #expect(result.exitCode == 0, "\(command) --help should exit 0")
+            #expect(
+                !result.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                "\(command) --help should emit stdout"
+            )
         }
     }
 
@@ -30,8 +33,8 @@ struct CommandCoverageTests {
 
         for command in commands where command != "clear" {
             let result = await session.run("\(command) --definitely-invalid-flag")
-            #expect(result.exitCode != 0)
-            #expect(!result.stderrString.isEmpty)
+            #expect(result.exitCode != 0, "\(command) invalid flag should fail")
+            #expect(!result.stderrString.isEmpty, "\(command) invalid flag should write stderr")
         }
     }
 

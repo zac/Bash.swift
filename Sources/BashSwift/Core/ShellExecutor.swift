@@ -167,6 +167,7 @@ enum ShellExecutor {
             filesystem: filesystem,
             enableGlobbing: enableGlobbing,
             availableCommands: commandRegistry.keys.sorted(),
+            commandRegistry: commandRegistry,
             history: history,
             currentDirectory: currentDirectory,
             environment: environment,

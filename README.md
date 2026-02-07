@@ -213,6 +213,9 @@ All implemented commands support `--help`.
 | `rmdir` | positional paths |
 | `stat` | positional paths |
 | `touch` | positional paths |
+| `chmod` | `<mode> <paths...>`, `-R`, `--recursive` (octal mode only) |
+| `file` | positional paths |
+| `tree` | optional path, `-a`, `-L <level>` |
 
 ### Text Processing
 
@@ -226,6 +229,11 @@ All implemented commands support `--help`.
 | `uniq` | `-c` |
 | `cut` | `-d <delimiter>`, `-f <fields>` |
 | `tr` | positional source/destination char sets |
+| `printf` | format string + positional values (`%s`, `%d`, `%i`, `%f`, `%%`) |
+| `base64` | encode by default; `-d`, `--decode` |
+| `sha256sum` | optional files (or stdin) |
+| `sha1sum` | optional files (or stdin) |
+| `md5sum` | optional files (or stdin) |
 
 ### Navigation & Environment
 
@@ -239,6 +247,7 @@ All implemented commands support `--help`.
 | `env` | none |
 | `export` | positional `KEY=VALUE` assignments |
 | `find` | `--name <pattern>`, optional path |
+| `hostname` | none |
 | `printenv` | optional positional keys |
 | `pwd` | none |
 | `tee` | `-a` |
@@ -254,7 +263,10 @@ All implemented commands support `--help`.
 | `history` | `-n`, `--n` |
 | `seq` | positional number args |
 | `sleep` | positional seconds |
+| `time` | `time <command...>` |
+| `timeout` | `timeout <seconds> <command...>` |
 | `true` | none |
+| `whoami` | none |
 | `which` | positional command names |
 
 ## Command Behaviors and Notes
@@ -275,18 +287,10 @@ The project currently includes parser, filesystem, integration, and command cove
 ## Roadmap
 
 ### Priority (next)
-1. `printf`
-2. `base64`
-3. `sha256sum`, `sha1sum`, `md5sum`
-4. `chmod`
-5. `file`
-6. `tree`
-7. `hostname`, `whoami`
-8. `time`, `timeout`
-
-### After that
 1. `diff`
 2. `rg`
+3. `awk`
+4. `sed`
 
 ### Deferred for later milestones
 - `jq`, `yq`, `xan`, `sqlite3`, `python`, `python3`

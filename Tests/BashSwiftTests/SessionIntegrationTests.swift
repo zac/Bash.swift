@@ -148,4 +148,89 @@ struct SessionIntegrationTests {
         #expect(history.stdoutString.contains("2  echo two"))
         #expect(history.stdoutString.contains("3  history"))
     }
+
+    @Test("printf base64 and digest commands")
+    func printfBase64AndDigestCommands() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let printf = await session.run("printf 'hello %s %d\\n' world 7")
+        #expect(printf.exitCode == 0)
+        #expect(printf.stdoutString == "hello world 7\n")
+
+        let encoded = await session.run("printf hello | base64")
+        #expect(encoded.exitCode == 0)
+        #expect(encoded.stdoutString == "aGVsbG8=\n")
+
+        let decoded = await session.run("printf aGVsbG8= | base64 -d")
+        #expect(decoded.exitCode == 0)
+        #expect(decoded.stdoutString == "hello")
+
+        let sha256 = await session.run("printf hello | sha256sum")
+        #expect(sha256.exitCode == 0)
+        #expect(sha256.stdoutString == "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824  -\n")
+
+        let sha1 = await session.run("printf hello | sha1sum")
+        #expect(sha1.exitCode == 0)
+        #expect(sha1.stdoutString == "aaf4c61ddcc5e8a2dabede0f3b482cd9aea9434d  -\n")
+
+        let md5 = await session.run("printf hello | md5sum")
+        #expect(md5.exitCode == 0)
+        #expect(md5.stdoutString == "5d41402abc4b2a76b9719d911017c592  -\n")
+    }
+
+    @Test("chmod file and tree commands")
+    func chmodFileAndTreeCommands() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p docs/nested")
+        _ = await session.run("echo hi > docs/nested/note.txt")
+
+        let chmod = await session.run("chmod 600 docs/nested/note.txt")
+        #expect(chmod.exitCode == 0)
+
+        let stat = await session.run("stat docs/nested/note.txt")
+        #expect(stat.exitCode == 0)
+        #expect(stat.stdoutString.contains("Mode: 600"))
+
+        let file = await session.run("file docs/nested/note.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString.contains("ASCII text"))
+
+        let tree = await session.run("tree docs")
+        #expect(tree.exitCode == 0)
+        #expect(tree.stdoutString.contains("docs\n"))
+        #expect(tree.stdoutString.contains("  nested\n"))
+        #expect(tree.stdoutString.contains("    note.txt\n"))
+    }
+
+    @Test("hostname and whoami commands")
+    func hostnameAndWhoamiCommands() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let hostname = await session.run("hostname")
+        #expect(hostname.exitCode == 0)
+        #expect(!hostname.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+
+        let whoami = await session.run("whoami")
+        #expect(whoami.exitCode == 0)
+        #expect(whoami.stdoutString == "user\n")
+    }
+
+    @Test("time and timeout commands")
+    func timeAndTimeoutCommands() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let timed = await session.run("time echo hi")
+        #expect(timed.exitCode == 0)
+        #expect(timed.stdoutString == "hi\n")
+        #expect(timed.stderrString.contains("real "))
+
+        let timeout = await session.run("timeout 0.01 sleep 0.2")
+        #expect(timeout.exitCode == 124)
+        #expect(timeout.stderrString.contains("timed out"))
+    }
 }

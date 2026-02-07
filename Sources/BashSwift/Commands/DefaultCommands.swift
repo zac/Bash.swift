@@ -1,4 +1,5 @@
 import ArgumentParser
+import CryptoKit
 import Foundation
 
 private enum CommandIO {
@@ -100,6 +101,44 @@ private enum CommandFS {
         }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return regex.firstMatch(in: value, range: range) != nil
+    }
+}
+
+private enum CommandText {
+    static func isLikelyText(_ data: Data) -> Bool {
+        if data.isEmpty {
+            return true
+        }
+
+        for byte in data {
+            if byte == 0 {
+                return false
+            }
+
+            if byte == 0x09 || byte == 0x0A || byte == 0x0D {
+                continue
+            }
+
+            if byte < 0x20 || byte > 0x7E {
+                return false
+            }
+        }
+
+        return true
+    }
+}
+
+private enum CommandHash {
+    static func sha256(_ data: Data) -> String {
+        SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func sha1(_ data: Data) -> String {
+        Insecure.SHA1.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func md5(_ data: Data) -> String {
+        Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
     }
 }
 
@@ -475,6 +514,211 @@ struct TouchCommand: BuiltinCommand {
     }
 }
 
+struct ChmodCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: [.customShort("R"), .customLong("recursive")], help: "Change files and directories recursively")
+        var recursive = false
+
+        @Argument(help: "Mode followed by files and directories")
+        var values: [String] = []
+    }
+
+    static let name = "chmod"
+    static let overview = "Change file mode bits"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard options.values.count >= 2 else {
+            context.writeStderr("chmod: expected mode and file operands\n")
+            return 1
+        }
+
+        let modeText = options.values[0]
+        guard let mode = Int(modeText, radix: 8) else {
+            context.writeStderr("chmod: invalid mode: \(modeText)\n")
+            return 1
+        }
+
+        var failed = false
+        for path in options.values.dropFirst() {
+            do {
+                let resolved = context.resolvePath(path)
+                try await applyMode(
+                    mode,
+                    to: resolved,
+                    recursive: options.recursive,
+                    filesystem: context.filesystem
+                )
+            } catch {
+                context.writeStderr("chmod: \(path): \(error)\n")
+                failed = true
+            }
+        }
+
+        return failed ? 1 : 0
+    }
+
+    private static func applyMode(
+        _ mode: Int,
+        to path: String,
+        recursive: Bool,
+        filesystem: any ShellFilesystem
+    ) async throws {
+        try await filesystem.setPermissions(path: path, permissions: mode)
+        guard recursive else {
+            return
+        }
+
+        let info = try await filesystem.stat(path: path)
+        guard info.isDirectory else {
+            return
+        }
+
+        let entries = try await filesystem.listDirectory(path: path)
+        for entry in entries {
+            try await applyMode(
+                mode,
+                to: PathUtils.join(path, entry.name),
+                recursive: true,
+                filesystem: filesystem
+            )
+        }
+    }
+}
+
+struct FileCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Paths to inspect")
+        var paths: [String] = []
+    }
+
+    static let name = "file"
+    static let overview = "Determine file type"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard !options.paths.isEmpty else {
+            context.writeStderr("file: missing operand\n")
+            return 1
+        }
+
+        var failed = false
+        for path in options.paths {
+            let resolved = context.resolvePath(path)
+            do {
+                let info = try await context.filesystem.stat(path: resolved)
+                let description: String
+                if info.isDirectory {
+                    description = "directory"
+                } else if info.isSymbolicLink {
+                    description = "symbolic link"
+                } else {
+                    let data = try await context.filesystem.readFile(path: resolved)
+                    if data.isEmpty {
+                        description = "empty"
+                    } else if CommandText.isLikelyText(data) {
+                        description = "ASCII text"
+                    } else {
+                        description = "data"
+                    }
+                }
+                context.writeStdout("\(path): \(description)\n")
+            } catch {
+                context.writeStderr("file: \(path): \(error)\n")
+                failed = true
+            }
+        }
+
+        return failed ? 1 : 0
+    }
+}
+
+struct TreeCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: .short, help: "Include entries starting with .")
+        var a = false
+
+        @Option(name: .customShort("L"), help: "Descend only level directories deep")
+        var level: Int?
+
+        @Argument(help: "Path to render")
+        var path: String = "."
+    }
+
+    static let name = "tree"
+    static let overview = "List contents of directories in a tree-like format"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if let level = options.level, level < 0 {
+            context.writeStderr("tree: level must be >= 0\n")
+            return 1
+        }
+
+        let resolved = context.resolvePath(options.path)
+        let displayName: String
+        if options.path == "." {
+            displayName = "."
+        } else if options.path == "/" || resolved == "/" {
+            displayName = "/"
+        } else {
+            displayName = PathUtils.basename(options.path)
+        }
+
+        do {
+            let lines = try await collectLines(
+                path: resolved,
+                displayName: displayName,
+                depth: 0,
+                maxDepth: options.level,
+                includeHidden: options.a,
+                filesystem: context.filesystem
+            )
+            context.writeStdout(lines.joined(separator: "\n"))
+            context.writeStdout("\n")
+            return 0
+        } catch {
+            context.writeStderr("tree: \(options.path): \(error)\n")
+            return 1
+        }
+    }
+
+    private static func collectLines(
+        path: String,
+        displayName: String,
+        depth: Int,
+        maxDepth: Int?,
+        includeHidden: Bool,
+        filesystem: any ShellFilesystem
+    ) async throws -> [String] {
+        var lines = [String(repeating: "  ", count: depth) + displayName]
+        let info = try await filesystem.stat(path: path)
+        guard info.isDirectory else {
+            return lines
+        }
+
+        if let maxDepth, depth >= maxDepth {
+            return lines
+        }
+
+        let children = try await filesystem.listDirectory(path: path)
+            .filter { includeHidden || !$0.name.hasPrefix(".") }
+            .sorted { $0.name < $1.name }
+
+        for child in children {
+            lines.append(
+                contentsOf: try await collectLines(
+                    path: PathUtils.join(path, child.name),
+                    displayName: child.name,
+                    depth: depth + 1,
+                    maxDepth: maxDepth,
+                    includeHidden: includeHidden,
+                    filesystem: filesystem
+                )
+            )
+        }
+
+        return lines
+    }
+}
+
 struct GrepCommand: BuiltinCommand {
     struct Options: ParsableArguments {
         @Flag(name: .short, help: "Ignore case distinctions")
@@ -781,6 +1025,235 @@ struct TrCommand: BuiltinCommand {
 
         context.writeStdout(translated)
         return 0
+    }
+}
+
+struct PrintfCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Format string")
+        var format: String
+
+        @Argument(help: "Values")
+        var values: [String] = []
+    }
+
+    static let name = "printf"
+    static let overview = "Format and print data"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        let rendered = render(format: unescape(options.format), values: options.values)
+        context.writeStdout(rendered)
+        return 0
+    }
+
+    private static func render(format: String, values: [String]) -> String {
+        var result = ""
+        let characters = Array(format)
+        var index = 0
+        var valueIndex = 0
+
+        func nextValue() -> String {
+            guard valueIndex < values.count else {
+                return ""
+            }
+            defer { valueIndex += 1 }
+            return values[valueIndex]
+        }
+
+        while index < characters.count {
+            let character = characters[index]
+            if character != "%" {
+                result.append(character)
+                index += 1
+                continue
+            }
+
+            index += 1
+            guard index < characters.count else {
+                result.append("%")
+                break
+            }
+
+            let specifier = characters[index]
+            switch specifier {
+            case "%":
+                result.append("%")
+            case "s", "@":
+                result.append(nextValue())
+            case "d", "i":
+                result.append(String(Int(nextValue()) ?? 0))
+            case "f":
+                result.append(String(Double(nextValue()) ?? 0))
+            default:
+                result.append("%")
+                result.append(specifier)
+            }
+            index += 1
+        }
+
+        return result
+    }
+
+    private static func unescape(_ input: String) -> String {
+        var result = ""
+        var index = input.startIndex
+
+        while index < input.endIndex {
+            let character = input[index]
+            guard character == "\\" else {
+                result.append(character)
+                index = input.index(after: index)
+                continue
+            }
+
+            let next = input.index(after: index)
+            guard next < input.endIndex else {
+                result.append("\\")
+                break
+            }
+
+            switch input[next] {
+            case "n":
+                result.append("\n")
+            case "t":
+                result.append("\t")
+            case "r":
+                result.append("\r")
+            case "\\":
+                result.append("\\")
+            default:
+                result.append(input[next])
+            }
+            index = input.index(after: next)
+        }
+
+        return result
+    }
+}
+
+struct Base64Command: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: [.customShort("d"), .long], help: "Decode data")
+        var decode = false
+
+        @Argument(help: "Optional files")
+        var files: [String] = []
+    }
+
+    static let name = "base64"
+    static let overview = "Base64 encode or decode data"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.files.isEmpty {
+            return runSingleBuffer(context: &context, pathLabel: "-", data: context.stdin, decode: options.decode)
+        }
+
+        var failed = false
+        for file in options.files {
+            do {
+                let data = try await context.filesystem.readFile(path: context.resolvePath(file))
+                let exit = runSingleBuffer(context: &context, pathLabel: file, data: data, decode: options.decode)
+                if exit != 0 {
+                    failed = true
+                }
+            } catch {
+                context.writeStderr("base64: \(file): \(error)\n")
+                failed = true
+            }
+        }
+
+        return failed ? 1 : 0
+    }
+
+    private static func runSingleBuffer(
+        context: inout CommandContext,
+        pathLabel: String,
+        data: Data,
+        decode: Bool
+    ) -> Int32 {
+        if decode {
+            let raw = String(decoding: data, as: UTF8.self)
+            let compact = raw.filter { !$0.isWhitespace }
+            guard let decoded = Data(base64Encoded: compact) else {
+                context.writeStderr("base64: \(pathLabel): invalid base64 input\n")
+                return 1
+            }
+            context.stdout.append(decoded)
+            return 0
+        }
+
+        context.writeStdout(data.base64EncodedString())
+        context.writeStdout("\n")
+        return 0
+    }
+}
+
+private enum DigestCommandRunner {
+    static func run(
+        command: String,
+        context: inout CommandContext,
+        files: [String],
+        digest: (Data) -> String
+    ) async -> Int32 {
+        if files.isEmpty {
+            let hash = digest(context.stdin)
+            context.writeStdout("\(hash)  -\n")
+            return 0
+        }
+
+        var failed = false
+        for file in files {
+            do {
+                let data = try await context.filesystem.readFile(path: context.resolvePath(file))
+                context.writeStdout("\(digest(data))  \(file)\n")
+            } catch {
+                context.writeStderr("\(command): \(file): \(error)\n")
+                failed = true
+            }
+        }
+        return failed ? 1 : 0
+    }
+}
+
+struct Sha256sumCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional files")
+        var files: [String] = []
+    }
+
+    static let name = "sha256sum"
+    static let overview = "Compute SHA-256 message digest"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        await DigestCommandRunner.run(command: name, context: &context, files: options.files, digest: CommandHash.sha256)
+    }
+}
+
+struct Sha1sumCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional files")
+        var files: [String] = []
+    }
+
+    static let name = "sha1sum"
+    static let overview = "Compute SHA-1 message digest"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        await DigestCommandRunner.run(command: name, context: &context, files: options.files, digest: CommandHash.sha1)
+    }
+}
+
+struct Md5sumCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional files")
+        var files: [String] = []
+    }
+
+    static let name = "md5sum"
+    static let overview = "Compute MD5 message digest"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        await DigestCommandRunner.run(command: name, context: &context, files: options.files, digest: CommandHash.md5)
     }
 }
 
@@ -1095,6 +1568,24 @@ struct DateCommand: BuiltinCommand {
     }
 }
 
+struct HostnameCommand: BuiltinCommand {
+    struct Options: ParsableArguments {}
+
+    static let name = "hostname"
+    static let overview = "Show or set system host name"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        _ = options
+        let host = ProcessInfo.processInfo.hostName
+        if host.isEmpty {
+            context.writeStdout("localhost\n")
+        } else {
+            context.writeStdout("\(host)\n")
+        }
+        return 0
+    }
+}
+
 struct FalseCommand: BuiltinCommand {
     struct Options: ParsableArguments {}
 
@@ -1104,6 +1595,20 @@ struct FalseCommand: BuiltinCommand {
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
         _ = context
         return 1
+    }
+}
+
+struct WhoamiCommand: BuiltinCommand {
+    struct Options: ParsableArguments {}
+
+    static let name = "whoami"
+    static let overview = "Print effective user name"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        _ = options
+        let user = context.environment["USER"] ?? NSUserName()
+        context.writeStdout((user.isEmpty ? "user" : user) + "\n")
+        return 0
     }
 }
 
@@ -1228,6 +1733,106 @@ struct SleepCommand: BuiltinCommand {
     }
 }
 
+struct TimeCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Command to execute")
+        var command: [String] = []
+    }
+
+    static let name = "time"
+    static let overview = "Run command and summarize execution time"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.command == ["--help"] || options.command == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Run command and summarize execution time
+                
+                USAGE: time <command> [<args> ...]
+                
+                """
+            )
+            return 0
+        }
+
+        guard !options.command.isEmpty else {
+            context.writeStderr("time: missing command\n")
+            return 1
+        }
+
+        let start = DispatchTime.now().uptimeNanoseconds
+        let result = await context.runSubcommand(options.command)
+        let end = DispatchTime.now().uptimeNanoseconds
+
+        context.stdout.append(result.stdout)
+        context.stderr.append(result.stderr)
+
+        let seconds = Double(end - start) / 1_000_000_000
+        context.writeStderr(String(format: "real %.3fs\n", seconds))
+        return result.exitCode
+    }
+}
+
+struct TimeoutCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Timeout in seconds")
+        var seconds: Double
+
+        @Argument(parsing: .captureForPassthrough, help: "Command to execute")
+        var command: [String] = []
+    }
+
+    static let name = "timeout"
+    static let overview = "Run command with time limit"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard options.seconds >= 0 else {
+            context.writeStderr("timeout: seconds must be >= 0\n")
+            return 1
+        }
+
+        guard !options.command.isEmpty else {
+            context.writeStderr("timeout: missing command\n")
+            return 1
+        }
+
+        enum Outcome: Sendable {
+            case completed(CommandResult, String, [String: String])
+            case timedOut
+        }
+
+        let baseContext = context
+        let timeoutNanos = UInt64(options.seconds * 1_000_000_000)
+        let outcome = await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                let sub = await baseContext.runSubcommandIsolated(options.command, stdin: baseContext.stdin)
+                return .completed(sub.result, sub.currentDirectory, sub.environment)
+            }
+
+            group.addTask {
+                try? await Task.sleep(nanoseconds: timeoutNanos)
+                return .timedOut
+            }
+
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case let .completed(result, newDirectory, newEnvironment):
+            context.currentDirectory = newDirectory
+            context.environment = newEnvironment
+            context.stdout.append(result.stdout)
+            context.stderr.append(result.stderr)
+            return result.exitCode
+        case .timedOut:
+            context.writeStderr("timeout: command timed out\n")
+            return 124
+        }
+    }
+}
+
 struct TrueCommand: BuiltinCommand {
     struct Options: ParsableArguments {}
 
@@ -1285,6 +1890,9 @@ extension BashSession {
             RmdirCommand.self,
             StatCommand.self,
             TouchCommand.self,
+            ChmodCommand.self,
+            FileCommand.self,
+            TreeCommand.self,
             GrepCommand.self,
             HeadCommand.self,
             TailCommand.self,
@@ -1293,6 +1901,11 @@ extension BashSession {
             UniqCommand.self,
             CutCommand.self,
             TrCommand.self,
+            PrintfCommand.self,
+            Base64Command.self,
+            Sha256sumCommand.self,
+            Sha1sumCommand.self,
+            Md5sumCommand.self,
             BasenameCommand.self,
             CdCommand.self,
             DirnameCommand.self,
@@ -1306,11 +1919,15 @@ extension BashSession {
             TeeCommand.self,
             ClearCommand.self,
             DateCommand.self,
+            HostnameCommand.self,
             FalseCommand.self,
+            WhoamiCommand.self,
             HelpCommand.self,
             HistoryCommand.self,
             SeqCommand.self,
             SleepCommand.self,
+            TimeCommand.self,
+            TimeoutCommand.self,
             TrueCommand.self,
             WhichCommand.self,
         ]
