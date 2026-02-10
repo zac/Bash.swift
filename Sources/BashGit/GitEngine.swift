@@ -1,5 +1,5 @@
 import Foundation
-import BashSwift
+import Bash
 
 #if canImport(CLibgit2)
 import CLibgit2

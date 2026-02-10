@@ -3,7 +3,7 @@
 import PackageDescription
 
 let package = Package(
-    name: "BashSwift",
+    name: "Bash",
     platforms: [
         .macOS(.v13),
         .iOS(.v16),
@@ -12,8 +12,8 @@ let package = Package(
     ],
     products: [
         .library(
-            name: "BashSwift",
-            targets: ["BashSwift"]
+            name: "Bash",
+            targets: ["Bash"]
         ),
         .library(
             name: "BashSQLite",
@@ -38,7 +38,7 @@ let package = Package(
             checksum: "f62a6760f8c2ff1a82e4fb80c69fe2aa068458c7619f5b98c53c71579f72f9c7"
         ),
         .target(
-            name: "BashSwift",
+            name: "Bash",
             dependencies: [
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
@@ -46,7 +46,7 @@ let package = Package(
         .target(
             name: "BashSQLite",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             linkerSettings: [
@@ -56,7 +56,7 @@ let package = Package(
         .target(
             name: "BashPython",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             resources: [
@@ -66,7 +66,7 @@ let package = Package(
         .target(
             name: "BashGit",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 "Clibgit2",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
@@ -75,27 +75,27 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "BashSwiftTests",
-            dependencies: ["BashSwift"]
+            name: "BashTests",
+            dependencies: ["Bash"]
         ),
         .testTarget(
             name: "BashSQLiteTests",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 "BashSQLite",
             ]
         ),
         .testTarget(
             name: "BashPythonTests",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 "BashPython",
             ]
         ),
         .testTarget(
             name: "BashGitTests",
             dependencies: [
-                "BashSwift",
+                "Bash",
                 "BashGit",
             ]
         ),

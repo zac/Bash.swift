@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-import BashSwift
+import Bash
 import BashSQLite
 
 @Suite("SQLite3 Output Modes")

@@ -111,7 +111,7 @@ public final actor BashSession {
     }
 
     private func createCommandStub(named commandName: String) async {
-        let content = "#!/bin/sh\n# BashSwift built-in: \(commandName)\n"
+        let content = "#!/bin/sh\n# Bash built-in: \(commandName)\n"
         let data = Data(content.utf8)
 
         for directory in ["/bin", "/usr/bin"] {

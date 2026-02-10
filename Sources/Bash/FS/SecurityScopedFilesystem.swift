@@ -33,7 +33,7 @@ public final class SecurityScopedFilesystem: SessionConfigurableFilesystem, @unc
         var isStale = false
         let resolvedURL = try URL(
             resolvingBookmarkData: bookmarkData,
-            options: [.withSecurityScope],
+            options: Self.bookmarkResolutionOptions,
             relativeTo: nil,
             bookmarkDataIsStale: &isStale
         )
@@ -41,7 +41,7 @@ public final class SecurityScopedFilesystem: SessionConfigurableFilesystem, @unc
         scopedURL = resolvedURL.standardizedFileURL
         if isStale {
             cachedBookmarkData = try scopedURL.bookmarkData(
-                options: [.withSecurityScope],
+                options: Self.bookmarkCreationOptions,
                 includingResourceValuesForKeys: nil,
                 relativeTo: nil
             )
@@ -68,7 +68,7 @@ public final class SecurityScopedFilesystem: SessionConfigurableFilesystem, @unc
         }
 
         let bookmarkData = try scopedURL.bookmarkData(
-            options: [.withSecurityScope],
+            options: Self.bookmarkCreationOptions,
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )
@@ -186,4 +186,12 @@ public final class SecurityScopedFilesystem: SessionConfigurableFilesystem, @unc
             throw ShellError.unsupported("filesystem is read-only")
         }
     }
+
+    #if os(macOS) || targetEnvironment(macCatalyst)
+    private static let bookmarkCreationOptions: URL.BookmarkCreationOptions = [.withSecurityScope]
+    private static let bookmarkResolutionOptions: URL.BookmarkResolutionOptions = [.withSecurityScope]
+    #else
+    private static let bookmarkCreationOptions: URL.BookmarkCreationOptions = []
+    private static let bookmarkResolutionOptions: URL.BookmarkResolutionOptions = []
+    #endif
 }

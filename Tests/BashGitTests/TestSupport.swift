@@ -1,6 +1,6 @@
 import Foundation
 import BashGit
-import BashSwift
+import Bash
 
 enum GitTestSupport {
     static func makeTempDirectory(prefix: String = "BashGitTests") throws -> URL {

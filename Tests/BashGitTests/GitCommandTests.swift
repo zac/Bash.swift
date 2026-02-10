@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import BashGit
-import BashSwift
+import Bash
 
 @Suite("Git Command")
 struct GitCommandTests {

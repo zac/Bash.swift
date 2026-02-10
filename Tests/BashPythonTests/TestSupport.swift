@@ -1,6 +1,6 @@
 import Foundation
 import BashPython
-import BashSwift
+import Bash
 
 enum PythonTestSupport {
     static func makeTempDirectory(prefix: String = "BashPythonTests") throws -> URL {

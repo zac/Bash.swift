@@ -1,10 +1,10 @@
 # AGENTS.md
 
-This file is a contributor guide for `BashSwift`.
+This file is a contributor guide for `Bash`.
 
 ## Project Goal
 
-`BashSwift` is an in-process, stateful, emulated shell for Swift apps.
+`Bash` is an in-process, stateful, emulated shell for Swift apps.
 
 Key properties:
 - Shell commands run inside Swift (no subprocess spawning).
@@ -15,7 +15,7 @@ Key properties:
 ## Tech + Platform Baseline
 
 - Swift tools: `6.2`
-- Package: SwiftPM library products `BashSwift`, `BashSQLite` (optional), `BashPython` (optional), `BashGit` (optional)
+- Package: SwiftPM library products `Bash`, `BashSQLite` (optional), `BashPython` (optional), `BashGit` (optional)
 - Parsing/help: [`swift-argument-parser`](https://github.com/apple/swift-argument-parser)
 - Tests: Swift Testing (`import Testing`), not XCTest
 - Package platforms:
@@ -42,7 +42,7 @@ Key properties:
 ### Session + state
 
 Primary entry point:
-- `Sources/BashSwift/BashSession.swift`
+- `Sources/Bash/BashSession.swift`
 
 Important behavior:
 - `BashSession` is an `actor`.
@@ -55,7 +55,7 @@ Important behavior:
 ### Command abstraction
 
 Command interface:
-- `Sources/BashSwift/Commands/BuiltinCommand.swift`
+- `Sources/Bash/Commands/BuiltinCommand.swift`
 
 Pattern:
 - Each command conforms to `BuiltinCommand`.
@@ -66,63 +66,63 @@ Pattern:
 ## Command Code Map
 
 Registration list:
-- `Sources/BashSwift/Commands/DefaultCommands.swift`
+- `Sources/Bash/Commands/DefaultCommands.swift`
 
 Shared helpers:
-- `Sources/BashSwift/Commands/CommandSupport.swift`
+- `Sources/Bash/Commands/CommandSupport.swift`
 
 File operation commands:
-- `Sources/BashSwift/Commands/File/BasicFileCommands.swift`
+- `Sources/Bash/Commands/File/BasicFileCommands.swift`
   - `cat`, `readlink`, `rm`, `stat`, `touch`
-- `Sources/BashSwift/Commands/File/CopyMoveLinkCommands.swift`
+- `Sources/Bash/Commands/File/CopyMoveLinkCommands.swift`
   - `cp`, `ln`, `mv`
-- `Sources/BashSwift/Commands/File/DirectoryCommands.swift`
+- `Sources/Bash/Commands/File/DirectoryCommands.swift`
   - `ls`, `mkdir`, `rmdir`
-- `Sources/BashSwift/Commands/File/MetadataCommands.swift`
+- `Sources/Bash/Commands/File/MetadataCommands.swift`
   - `chmod`, `file`
-- `Sources/BashSwift/Commands/File/TreeCommand.swift`
+- `Sources/Bash/Commands/File/TreeCommand.swift`
   - `tree`
 
 Text/search/transform commands:
-- `Sources/BashSwift/Commands/Text/DiffCommand.swift`
+- `Sources/Bash/Commands/Text/DiffCommand.swift`
   - `diff`
-- `Sources/BashSwift/Commands/Text/SearchCommands.swift`
+- `Sources/Bash/Commands/Text/SearchCommands.swift`
   - `grep` (+ aliases), `rg`
-- `Sources/BashSwift/Commands/Text/LineCommands.swift`
+- `Sources/Bash/Commands/Text/LineCommands.swift`
   - `head`, `tail`, `wc`
-- `Sources/BashSwift/Commands/Text/TransformCommands.swift`
+- `Sources/Bash/Commands/Text/TransformCommands.swift`
   - `sort`, `uniq`, `cut`, `tr`
-- `Sources/BashSwift/Commands/Text/AwkCommand.swift`
+- `Sources/Bash/Commands/Text/AwkCommand.swift`
   - `awk`
-- `Sources/BashSwift/Commands/Text/SedCommand.swift`
+- `Sources/Bash/Commands/Text/SedCommand.swift`
   - `sed`
-- `Sources/BashSwift/Commands/Text/XargsCommand.swift`
+- `Sources/Bash/Commands/Text/XargsCommand.swift`
   - `xargs`
 
 Formatting/hash commands:
-- `Sources/BashSwift/Commands/FormattingCommands.swift`
+- `Sources/Bash/Commands/FormattingCommands.swift`
   - `printf`, `base64`, `sha256sum`, `sha1sum`, `md5sum`
 
 Compression/archive commands:
-- `Sources/BashSwift/Commands/CompressionCommands.swift`
+- `Sources/Bash/Commands/CompressionCommands.swift`
   - `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 
 Data processing commands:
-- `Sources/BashSwift/Commands/DataCommands.swift`
+- `Sources/Bash/Commands/DataCommands.swift`
   - `jq`, `yq`, `xan`
 
 Navigation/environment commands:
-- `Sources/BashSwift/Commands/NavigationCommands.swift`
+- `Sources/Bash/Commands/NavigationCommands.swift`
   - `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`
 
 Utility commands:
-- `Sources/BashSwift/Commands/UtilityCommands.swift`
+- `Sources/Bash/Commands/UtilityCommands.swift`
   - `clear`, `date`, `hostname`, `false`, `whoami`, `help`, `history`, `seq`, `sleep`, `time`, `timeout`, `true`, `which`
 
 Network commands:
-- `Sources/BashSwift/Commands/NetworkCommands.swift`
+- `Sources/Bash/Commands/NetworkCommands.swift`
   - `curl`
-- `Sources/BashSwift/Commands/Network/HtmlToMarkdownCommand.swift`
+- `Sources/Bash/Commands/Network/HtmlToMarkdownCommand.swift`
   - `html-to-markdown`
 
 Optional module commands:
@@ -138,33 +138,33 @@ Optional module commands:
 ## Filesystem Architecture
 
 Filesystem protocol:
-- `Sources/BashSwift/FS/ShellFilesystem.swift`
+- `Sources/Bash/FS/ShellFilesystem.swift`
 
 Rootless-session protocol:
-- `Sources/BashSwift/FS/SessionConfigurableFilesystem.swift`
+- `Sources/Bash/FS/SessionConfigurableFilesystem.swift`
 
 Implementations:
-- `Sources/BashSwift/FS/ReadWriteFilesystem.swift`
+- `Sources/Bash/FS/ReadWriteFilesystem.swift`
   - Real disk I/O with jail to configured root.
-- `Sources/BashSwift/FS/InMemoryFilesystem.swift`
+- `Sources/Bash/FS/InMemoryFilesystem.swift`
   - Pure in-memory tree.
-- `Sources/BashSwift/FS/SandboxFilesystem.swift`
+- `Sources/Bash/FS/SandboxFilesystem.swift`
   - Root chooser (`documents`, `caches`, `temporary`, app group, custom URL), delegates to read-write backing.
-- `Sources/BashSwift/FS/SecurityScopedFilesystem.swift`
+- `Sources/Bash/FS/SecurityScopedFilesystem.swift`
   - Security-scoped URL/bookmark-backed root, optional read-only mode, runtime unsupported on tvOS/watchOS.
 
 Bookmark persistence:
-- `Sources/BashSwift/FS/BookmarkStore.swift`
-- `Sources/BashSwift/FS/UserDefaultsBookmarkStore.swift`
+- `Sources/Bash/FS/BookmarkStore.swift`
+- `Sources/Bash/FS/UserDefaultsBookmarkStore.swift`
 
 Path + jail utilities:
-- `Sources/BashSwift/Core/PathUtils.swift`
+- `Sources/Bash/Core/PathUtils.swift`
 
 ## Parser + Executor Source Map
 
-- `Sources/BashSwift/Core/ShellLexer.swift`
-- `Sources/BashSwift/Core/ShellParser.swift`
-- `Sources/BashSwift/Core/ShellExecutor.swift`
+- `Sources/Bash/Core/ShellLexer.swift`
+- `Sources/Bash/Core/ShellParser.swift`
+- `Sources/Bash/Core/ShellExecutor.swift`
 
 Current shell language scope (implemented):
 - Pipes: `|`
@@ -180,11 +180,11 @@ Not in scope yet:
 ## Testing Structure
 
 All tests are Swift Testing suites:
-- `Tests/BashSwiftTests/ParserAndFilesystemTests.swift`
-- `Tests/BashSwiftTests/SessionIntegrationTests.swift`
-- `Tests/BashSwiftTests/CommandCoverageTests.swift`
-- `Tests/BashSwiftTests/FilesystemOptionsTests.swift`
-- `Tests/BashSwiftTests/TestSupport.swift`
+- `Tests/BashTests/ParserAndFilesystemTests.swift`
+- `Tests/BashTests/SessionIntegrationTests.swift`
+- `Tests/BashTests/CommandCoverageTests.swift`
+- `Tests/BashTests/FilesystemOptionsTests.swift`
+- `Tests/BashTests/TestSupport.swift`
 - `Tests/BashSQLiteTests/*`
 - `Tests/BashPythonTests/*`
 - `Tests/BashGitTests/*`
@@ -228,7 +228,7 @@ When adding filesystem implementations:
 ## Command Registry Update Checklist
 
 If you add a new built-in command:
-1. Add the command type to `defaults` in `Sources/BashSwift/Commands/DefaultCommands.swift`.
-2. Add it to the coverage list in `Tests/BashSwiftTests/CommandCoverageTests.swift`.
+1. Add the command type to `defaults` in `Sources/Bash/Commands/DefaultCommands.swift`.
+2. Add it to the coverage list in `Tests/BashTests/CommandCoverageTests.swift`.
 3. Add integration tests for at least one success and one failure/edge case.
 4. Ensure `--help` output works and invalid flag behavior is non-zero.

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import BashSwift
+@testable import Bash
 
 @Suite("Session Integration")
 struct SessionIntegrationTests {

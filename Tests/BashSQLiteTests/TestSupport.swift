@@ -1,6 +1,6 @@
 import Foundation
 import BashSQLite
-import BashSwift
+import Bash
 
 enum SQLiteTestSupport {
     static func makeTempDirectory(prefix: String = "BashSQLiteTests") throws -> URL {

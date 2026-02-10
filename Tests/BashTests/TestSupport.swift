@@ -1,8 +1,8 @@
 import Foundation
-@testable import BashSwift
+@testable import Bash
 
 enum TestSupport {
-    static func makeTempDirectory(prefix: String = "BashSwiftTests") throws -> URL {
+    static func makeTempDirectory(prefix: String = "BashTests") throws -> URL {
         let base = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let url = base.appendingPathComponent("\(prefix)-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

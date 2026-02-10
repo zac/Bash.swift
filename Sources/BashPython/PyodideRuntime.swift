@@ -1,5 +1,5 @@
 import Foundation
-import BashSwift
+import Bash
 
 #if canImport(JavaScriptCore)
 import JavaScriptCore

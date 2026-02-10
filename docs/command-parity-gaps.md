@@ -1,12 +1,12 @@
 # Command Parity Gap Tracker
 
-This document tracks command-level parity gaps ("delinquencies") between `BashSwift` and `just-bash`, plus a recommended closure path that prefers internal implementations over new third-party dependencies.
+This document tracks command-level parity gaps ("delinquencies") between `Bash` and `just-bash`, plus a recommended closure path that prefers internal implementations over new third-party dependencies.
 
 Reference baseline:
 - `just-bash-main/src/commands/**`
 
 Dependency policy for gap closure:
-- Prefer `Foundation`, Swift stdlib, and existing `BashSwift` utilities.
+- Prefer `Foundation`, Swift stdlib, and existing `Bash` utilities.
 - Avoid new external libraries unless the command is effectively infeasible without one.
 - If full parity is large, ship in phases: common LLM paths first, edge semantics second.
 
@@ -309,6 +309,6 @@ Source references: `curl`, `html-to-markdown`.
 ## Test Expectations Per Gap
 
 For each command as gaps close:
-- Add one success case and one failure case in `Tests/BashSwiftTests/SessionIntegrationTests.swift`.
-- Add `--help` assertion in `Tests/BashSwiftTests/CommandCoverageTests.swift` when new options are added.
+- Add one success case and one failure case in `Tests/BashTests/SessionIntegrationTests.swift`.
+- Add `--help` assertion in `Tests/BashTests/CommandCoverageTests.swift` when new options are added.
 - Add parser-specific unit tests where command option parsing gets complex (`rg`, `sed`, `awk`, `find`, `tar`, `jq`, `yq`).

@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import BashSwift
+@testable import Bash
 
 @Suite("Parser and Filesystem")
 struct ParserAndFilesystemTests {
@@ -77,7 +77,7 @@ struct ParserAndFilesystemTests {
         let (session, root) = try await TestSupport.makeSession()
         defer { TestSupport.removeDirectory(root) }
 
-        let outside = try TestSupport.makeTempDirectory(prefix: "BashSwiftOutside")
+        let outside = try TestSupport.makeTempDirectory(prefix: "BashOutside")
         defer { TestSupport.removeDirectory(outside) }
 
         let outsideFile = outside.appendingPathComponent("outside.txt")
@@ -106,7 +106,7 @@ struct ParserAndFilesystemTests {
 
     @Test("in-memory filesystem keeps writes off disk")
     func inMemoryFilesystemKeepsWritesOffDisk() async throws {
-        let root = try TestSupport.makeTempDirectory(prefix: "BashSwiftInMemory")
+        let root = try TestSupport.makeTempDirectory(prefix: "BashInMemory")
         defer { TestSupport.removeDirectory(root) }
 
         let session = try await BashSession(

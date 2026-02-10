@@ -1,4 +1,4 @@
-import BashSwift
+import Bash
 
 public extension BashSession {
     func registerSQLite3() async {

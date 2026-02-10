@@ -1,7 +1,7 @@
 import Foundation
 import Testing
 import BashPython
-import BashSwift
+import Bash
 
 @Suite("Python3 Command")
 struct Python3CommandTests {

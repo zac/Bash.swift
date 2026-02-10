@@ -1,6 +1,6 @@
 import Foundation
 import Testing
-@testable import BashSwift
+@testable import Bash
 
 @Suite("Filesystem Options")
 struct FilesystemOptionsTests {
@@ -126,7 +126,7 @@ struct FilesystemOptionsTests {
     #else
     @Test("security-scoped bookmark roundtrip and read-only enforcement")
     func securityScopedBookmarkRoundtripAndReadOnlyEnforcement() async throws {
-        let root = try TestSupport.makeTempDirectory(prefix: "BashSwiftSecurityScoped")
+        let root = try TestSupport.makeTempDirectory(prefix: "BashSecurityScoped")
         defer { TestSupport.removeDirectory(root) }
 
         let readWriteFS = try SecurityScopedFilesystem(url: root, mode: .readWrite)

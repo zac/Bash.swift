@@ -1,12 +1,12 @@
-# BashSwift
+# Bash
 
-`BashSwift` provides an in-process, stateful, emulated shell for Swift apps.
+`Bash` provides an in-process, stateful, emulated shell for Swift apps.
 
 You create a `BashSession`, run shell command strings, and get structured `stdout` / `stderr` / `exitCode` results. Commands mutate a real directory on disk through a sandboxed, root-jail filesystem abstraction.
 
 ## Why
 
-`BashSwift` is aimed at practical shell behavior you can use from app code and tests:
+`Bash` is aimed at practical shell behavior you can use from app code and tests:
 - Stateful shell session (`cd`, `export`, `history` persist across `run` calls)
 - Real filesystem side effects under a controlled root directory
 - Built-in fake CLIs implemented in Swift (no subprocess dependency)
@@ -24,12 +24,12 @@ You create a `BashSession`, run shell command strings, and get structured `stdou
 .targets: [
     .target(
         name: "YourTarget",
-        dependencies: ["BashSwift", "BashSQLite", "BashPython", "BashGit"]
+        dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit"]
     )
 ]
 ```
 
-`BashSQLite`, `BashPython`, and `BashGit` are optional. If you only need the core shell, depend on `BashSwift` alone.
+`BashSQLite`, `BashPython`, and `BashGit` are optional. If you only need the core shell, depend on `Bash` alone.
 
 ## Platform Support
 
@@ -42,10 +42,10 @@ Current package platforms:
 ## Quick Start
 
 ```swift
-import BashSwift
+import Bash
 import Foundation
 
-let root = URL(fileURLWithPath: "/tmp/bashswift-session", isDirectory: true)
+let root = URL(fileURLWithPath: "/tmp/bash-session", isDirectory: true)
 let session = try await BashSession(rootDirectory: root)
 
 _ = await session.run("touch file.txt")

@@ -1,5 +1,5 @@
 import Foundation
-import BashSwift
+import Bash
 
 public enum PythonExecutionMode: String, Sendable {
     case code

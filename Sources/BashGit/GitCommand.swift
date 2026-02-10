@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import BashSwift
+import Bash
 
 public struct GitCommand: BuiltinCommand {
     public struct Options: ParsableArguments {
