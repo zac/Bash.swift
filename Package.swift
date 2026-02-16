@@ -27,6 +27,10 @@ let package = Package(
             name: "BashGit",
             targets: ["BashGit"]
         ),
+        .library(
+            name: "BashSecrets",
+            targets: ["BashSecrets"]
+        ),
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
@@ -74,6 +78,16 @@ let package = Package(
                 .linkedLibrary("iconv")
             ]
         ),
+        .target(
+            name: "BashSecrets",
+            dependencies: [
+                "Bash",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+            ],
+            linkerSettings: [
+                .linkedFramework("Security")
+            ]
+        ),
         .testTarget(
             name: "BashTests",
             dependencies: ["Bash"]
@@ -97,6 +111,13 @@ let package = Package(
             dependencies: [
                 "Bash",
                 "BashGit",
+            ]
+        ),
+        .testTarget(
+            name: "BashSecretsTests",
+            dependencies: [
+                "Bash",
+                "BashSecrets",
             ]
         ),
     ]

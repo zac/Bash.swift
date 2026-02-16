@@ -45,13 +45,13 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 ]
 ```
 
-`BashSQLite`, `BashPython`, and `BashGit` are optional products. Add them only if needed:
+`BashSQLite`, `BashPython`, `BashGit`, and `BashSecrets` are optional products. Add them only if needed:
 
 ```swift
-dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit"]
+dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit", "BashSecrets"]
 ```
 
-If you include optional products, remember to register their commands at runtime (`registerSQLite3`, `registerPython`, `registerGit`).
+If you include optional products, remember to register their commands at runtime (`registerSQLite3`, `registerPython`, `registerGit`, `registerSecrets`).
 
 ## Platform Support
 
@@ -115,6 +115,32 @@ print(commit.exitCode)
 ```
 
 `BashGit` uses a prebuilt `Clibgit2.xcframework` binary target (iOS, iOS Simulator, macOS, Catalyst). The binary artifact is fetched by SwiftPM during dependency resolution.
+
+Optional `secrets` registration:
+
+```swift
+import BashSecrets
+
+await session.registerSecrets()
+let ref = await session.run("secrets put --service app --account api", stdin: Data("token".utf8))
+let use = await session.run("secrets run --env API_TOKEN=\(ref.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)) -- printenv API_TOKEN")
+print(use.stdoutString)
+```
+
+`BashSecrets` defaults to Apple Keychain generic-password storage through Security.framework and emits opaque `secretref:v1:...` references.
+
+For harness/tooling flows where the model should only handle references, use the `Secrets` API directly:
+
+```swift
+let ref = try await Secrets.putGenericPassword(
+    service: "app",
+    account: "api",
+    value: Data("token".utf8)
+)
+
+// Resolve inside trusted tool code, not in model-visible shell output.
+let secretValue = try await Secrets.resolveReference(ref)
+```
 
 ## Public API
 
@@ -308,6 +334,7 @@ All implemented commands support `--help`.
 | --- | --- |
 | `sqlite3` | **Opt-in via `BashSQLite`**: modes `-list`, `-csv`, `-json`, `-line`, `-column`, `-table`, `-markdown`; `-header`, `-noheader`, `-separator <sep>`, `-newline <nl>`, `-nullvalue <str>`, `-readonly`, `-bail`, `-cmd <sql>`, `-version`, `--`; syntax `sqlite3 [options] [database] [sql]` |
 | `python3` / `python` | **Opt-in via `BashPython`**: `python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]`; supports `-c`, `-m`, `-V/--version`, stdin execution, and script file execution against shell-managed filesystem |
+| `secrets` / `secret` | **Opt-in via `BashSecrets`**: `put`, `ref`, `get`, `delete`, `run`; Keychain generic-password backend with reference-first flows (`secretref:v1:...`) and explicit `get --reveal` for plaintext output |
 | `jq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files. Query subset supports paths, `|`, `select(...)`, comparisons, `and`/`or`/`not`, `//` |
 | `yq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files (YAML + JSON input), same query subset as `jq` |
 | `xan` | subcommands: `count`, `headers`, `select`, `filter` |
