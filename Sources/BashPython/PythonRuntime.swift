@@ -51,6 +51,14 @@ public protocol PythonRuntime: Sendable {
         request: PythonExecutionRequest,
         filesystem: any ShellFilesystem
     ) async -> PythonExecutionResult
+
+    func versionString() async -> String
+}
+
+public extension PythonRuntime {
+    func versionString() async -> String {
+        "Python 3"
+    }
 }
 
 public actor PythonRuntimeRegistry {
@@ -59,7 +67,7 @@ public actor PythonRuntimeRegistry {
     private var runtime: any PythonRuntime
 
     public init(runtime: (any PythonRuntime)? = nil) {
-        self.runtime = runtime ?? PyodideRuntime()
+        self.runtime = runtime ?? CPythonRuntime()
     }
 
     public func setRuntime(_ runtime: any PythonRuntime) {
@@ -71,7 +79,7 @@ public actor PythonRuntimeRegistry {
     }
 
     public func resetToDefault() {
-        runtime = PyodideRuntime()
+        runtime = CPythonRuntime()
     }
 }
 
@@ -80,8 +88,12 @@ public enum BashPython {
         await PythonRuntimeRegistry.shared.setRuntime(runtime)
     }
 
-    public static func setPyodideRuntime(configuration: PyodideConfiguration = .default) async {
-        await PythonRuntimeRegistry.shared.setRuntime(PyodideRuntime(configuration: configuration))
+    public static func setCPythonRuntime(configuration: CPythonConfiguration = .default) async {
+        await PythonRuntimeRegistry.shared.setRuntime(CPythonRuntime(configuration: configuration))
+    }
+
+    public static func isCPythonRuntimeAvailable() -> Bool {
+        CPythonRuntime.isAvailable()
     }
 
     public static func resetRuntime() async {
@@ -107,5 +119,9 @@ struct UnsupportedPythonRuntime: PythonRuntime {
             stderr: "python3: \(message)\n",
             exitCode: 1
         )
+    }
+
+    func versionString() async -> String {
+        "Python 3 (unavailable: \(message))"
     }
 }

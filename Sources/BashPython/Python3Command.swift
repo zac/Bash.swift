@@ -12,10 +12,10 @@ public struct Python3Command: BuiltinCommand {
 
     public static let name = "python3"
     public static let aliases = ["python"]
-    public static let overview = "Execute Python code via Pyodide"
+    public static let overview = "Execute Python code via embedded CPython"
 
     private static let helpText = """
-    OVERVIEW: Execute Python code via Pyodide
+    OVERVIEW: Execute Python code via embedded CPython
 
     USAGE: python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]
 
@@ -40,7 +40,8 @@ public struct Python3Command: BuiltinCommand {
             return 2
         case let .success(invocation):
             if invocation.showVersion {
-                context.writeStdout("Python 3 (Pyodide)\n")
+                let runtime = await PythonRuntimeRegistry.shared.currentRuntime()
+                context.writeStdout(await runtime.versionString() + "\n")
                 return 0
             }
 

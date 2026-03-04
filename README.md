@@ -93,14 +93,19 @@ Optional `python3` / `python` registration:
 ```swift
 import BashPython
 
-await BashPython.setPyodideRuntime() // Optional: uses bundled pyodide.js by default.
+await BashPython.setCPythonRuntime() // Optional: defaults to strict filesystem shims.
 await session.registerPython()
 
 let py = await session.run("python3 -c \"print('hi')\"")
 print(py.stdoutString) // hi
 ```
 
-`PyodideRuntime` needs access to a Pyodide distribution. Default config uses bundled `pyodide.js`; you can provide custom loader/index URLs via `PyodideConfiguration`.
+`BashPython` embeds CPython directly (no JavaScriptCore/Pyodide path). Phase 1 runtime support is macOS + iOS/iPadOS.
+On unsupported platforms (`tvOS`, `watchOS`), the module still compiles but runtime execution returns an unavailable error.
+
+Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
+Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
+`pip` and arbitrary native extension loading are non-goals in this runtime profile.
 
 Optional `git` registration:
 
@@ -356,7 +361,7 @@ All implemented commands support `--help`.
 | Command | Supported Options |
 | --- | --- |
 | `sqlite3` | **Opt-in via `BashSQLite`**: modes `-list`, `-csv`, `-json`, `-line`, `-column`, `-table`, `-markdown`; `-header`, `-noheader`, `-separator <sep>`, `-newline <nl>`, `-nullvalue <str>`, `-readonly`, `-bail`, `-cmd <sql>`, `-version`, `--`; syntax `sqlite3 [options] [database] [sql]` |
-| `python3` / `python` | **Opt-in via `BashPython`**: `python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]`; supports `-c`, `-m`, `-V/--version`, stdin execution, and script file execution against shell-managed filesystem |
+| `python3` / `python` | **Opt-in via `BashPython`**: embedded CPython runtime (`python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]`); supports `-c`, `-m`, `-V/--version`, stdin execution, and script/module execution against strict shell-filesystem shims (process/FFI escape APIs blocked) |
 | `secrets` / `secret` | **Opt-in via `BashSecrets`**: `put`, `ref`, `get`, `delete`, `run`; Keychain generic-password backend with reference-first flows (`secretref:v1:...`) and explicit `get --reveal` for plaintext output |
 | `jq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files. Query subset supports paths, `|`, `select(...)`, comparisons, `and`/`or`/`not`, `//` |
 | `yq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files (YAML + JSON input), same query subset as `jq` |

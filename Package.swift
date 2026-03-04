@@ -41,6 +41,10 @@ let package = Package(
             url: "https://github.com/flaboy/static-libgit2/releases/download/1.8.5/Clibgit2.xcframework.zip",
             checksum: "f62a6760f8c2ff1a82e4fb80c69fe2aa068458c7619f5b98c53c71579f72f9c7"
         ),
+        .binaryTarget(
+            name: "CPython",
+            path: "Sources/BashPython/Frameworks/CPython.xcframework"
+        ),
         .target(
             name: "Bash",
             dependencies: [
@@ -61,10 +65,25 @@ let package = Package(
             name: "BashPython",
             dependencies: [
                 "Bash",
+                .target(
+                    name: "BashCPythonBridge",
+                    condition: .when(platforms: [.macOS, .iOS])
+                ),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
-            resources: [
-                .process("Resources")
+            exclude: ["Frameworks"]
+        ),
+        .target(
+            name: "BashCPythonBridge",
+            dependencies: [
+                .target(
+                    name: "CPython",
+                    condition: .when(platforms: [.macOS])
+                ),
+            ],
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedFramework("Python3", .when(platforms: [.macOS])),
             ]
         ),
         .target(
