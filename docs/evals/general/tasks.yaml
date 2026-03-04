@@ -1,0 +1,388 @@
+version: 0.1.0
+
+tasks:
+  - id: core.file.create_exact_file
+    tier: core
+    prompt: |
+      Create a file named `myfile.txt` in the current directory.
+      It must contain exactly the word `pass` followed by a trailing newline.
+    setup:
+      - rm -f myfile.txt
+    validate:
+      - test -f myfile.txt
+      - test "$(cat myfile.txt)" = "pass"
+      - test "$(wc -c < myfile.txt | tr -d ' ')" = "5"
+    tags: [file, echo, redirection]
+
+  - id: core.file.append_lines
+    tier: core
+    prompt: |
+      `log.txt` already has one line: `alpha`.
+      Append two new lines in order: `beta` and `gamma`.
+    setup:
+      - printf 'alpha\n' > log.txt
+    validate:
+      - test "$(sed -n '1p' log.txt)" = "alpha"
+      - test "$(sed -n '2p' log.txt)" = "beta"
+      - test "$(sed -n '3p' log.txt)" = "gamma"
+      - test "$(wc -l < log.txt | tr -d ' ')" = "3"
+    tags: [file, append, redirection]
+
+  - id: core.file.copy_and_move
+    tier: core
+    prompt: |
+      Copy `a.txt` to `copies/a.backup`.
+      Then move the original `a.txt` to `archive/a.txt`.
+    setup:
+      - rm -rf copies archive a.txt
+      - printf 'alpha-copy-move\n' > a.txt
+    validate:
+      - test -f copies/a.backup
+      - test -f archive/a.txt
+      - cmp -s copies/a.backup archive/a.txt
+    tags: [cp, mv, mkdir]
+
+  - id: core.dir.create_tree
+    tier: core
+    prompt: |
+      Create directories `src/lib` and `src/bin`.
+      Create `src/lib/main.swift` containing `hello` and an empty file `src/bin/run.sh`.
+    setup:
+      - rm -rf src
+    validate:
+      - test -d src/lib
+      - test -d src/bin
+      - test -f src/lib/main.swift
+      - test "$(cat src/lib/main.swift)" = "hello"
+      - test -f src/bin/run.sh
+    tags: [mkdir, touch, file]
+
+  - id: core.find_rg_count_matches
+    tier: core
+    prompt: |
+      Count how many lines containing the word `token` exist in `.txt` files under `data/`.
+      Write only the number to `count.txt`.
+    setup:
+      - rm -rf data count.txt
+      - mkdir -p data
+      - printf 'token one\nother\n' > data/a.txt
+      - printf 'x\ntoken two\ntoken three\n' > data/b.txt
+      - printf 'token not counted\n' > data/c.log
+    validate:
+      - test -f count.txt
+      - test "$(cat count.txt)" = "3"
+    tags: [find, rg, grep, counting]
+
+  - id: core.text.grep_filter_errors
+    tier: core
+    prompt: |
+      Filter `access.log` so that `errors.log` contains only lines with status code `500`.
+    setup:
+      - rm -f access.log errors.log
+      - printf '200 ok\n500 err1\n404 miss\n500 err2\n' > access.log
+    validate:
+      - test -f errors.log
+      - test "$(wc -l < errors.log | tr -d ' ')" = "2"
+      - grep -q '^500 ' errors.log
+      - "! grep -q '^200 ' errors.log"
+    tags: [grep, pipeline]
+
+  - id: core.text.sed_substitution
+    tier: core
+    prompt: |
+      Replace all occurrences of `cat` with `dog` from `animals.txt` and write the result to `animals.out.txt`.
+    setup:
+      - rm -f animals.txt animals.out.txt
+      - printf 'cat\nbobcat\ncatfish\n' > animals.txt
+    validate:
+      - test "$(sed -n '1p' animals.out.txt)" = "dog"
+      - test "$(sed -n '2p' animals.out.txt)" = "bobdog"
+      - test "$(sed -n '3p' animals.out.txt)" = "dogfish"
+    tags: [sed, transform]
+
+  - id: core.text.awk_extract_column
+    tier: core
+    prompt: |
+      From `cities.csv`, write the third column (excluding the header) to `cities.txt`, one city per line.
+    setup:
+      - rm -f cities.csv cities.txt
+      - printf 'id,name,city\n1,Alice,Austin\n2,Bob,Boise\n3,Cora,Chicago\n' > cities.csv
+    validate:
+      - test "$(sed -n '1p' cities.txt)" = "Austin"
+      - test "$(sed -n '2p' cities.txt)" = "Boise"
+      - test "$(sed -n '3p' cities.txt)" = "Chicago"
+      - test "$(wc -l < cities.txt | tr -d ' ')" = "3"
+    tags: [awk, csv]
+
+  - id: core.text.cut_sort_uniq
+    tier: core
+    prompt: |
+      `items.txt` has two columns separated by spaces.
+      Extract the second column, deduplicate it, sort ascending, and write to `unique.txt`.
+    setup:
+      - rm -f items.txt unique.txt
+      - printf '2 banana\n1 apple\n3 banana\n4 cherry\n' > items.txt
+    validate:
+      - test "$(sed -n '1p' unique.txt)" = "apple"
+      - test "$(sed -n '2p' unique.txt)" = "banana"
+      - test "$(sed -n '3p' unique.txt)" = "cherry"
+      - test "$(wc -l < unique.txt | tr -d ' ')" = "3"
+    tags: [cut, sort, uniq]
+
+  - id: core.text.tr_uppercase
+    tier: core
+    prompt: |
+      Convert the contents of `lower.txt` to uppercase and save as `upper.txt`.
+    setup:
+      - rm -f lower.txt upper.txt
+      - printf 'hello world\n' > lower.txt
+    validate:
+      - test "$(cat upper.txt)" = "HELLO WORLD"
+    tags: [tr]
+
+  - id: core.text.head_tail_split
+    tier: core
+    prompt: |
+      `numbers.txt` contains lines 1 through 20.
+      Write the first 3 lines to `top.txt` and the last 2 lines to `bottom.txt`.
+    setup:
+      - rm -f numbers.txt top.txt bottom.txt
+      - seq 1 20 > numbers.txt
+    validate:
+      - test "$(sed -n '1p' top.txt)" = "1"
+      - test "$(sed -n '3p' top.txt)" = "3"
+      - test "$(sed -n '1p' bottom.txt)" = "19"
+      - test "$(sed -n '2p' bottom.txt)" = "20"
+    tags: [head, tail]
+
+  - id: core.shell.stderr_redirection
+    tier: core
+    prompt: |
+      Try to read `missing.txt` and redirect only stderr to `err.log`.
+      Make sure `err.log` is created and contains the error message.
+    setup:
+      - rm -f missing.txt err.log
+    validate:
+      - test -s err.log
+      - grep -q 'missing.txt' err.log
+    tags: [redirection, stderr]
+
+  - id: core.shell.chain_and_or
+    tier: core
+    prompt: |
+      Use `&&` and `||` so that `result.txt` ends up containing exactly `fallback`.
+      Start from a failing command.
+    setup:
+      - rm -f result.txt
+    validate:
+      - test -f result.txt
+      - test "$(cat result.txt)" = "fallback"
+    tags: [chain, and-or]
+
+  - id: core.shell.env_default_expansion
+    tier: core
+    prompt: |
+      Without setting `NEW_VAR`, write `${NEW_VAR:-default_value}` to `default.txt`.
+    setup:
+      - rm -f default.txt
+      - unset NEW_VAR
+    validate:
+      - test "$(cat default.txt)" = "default_value"
+    tags: [variables, expansion]
+
+  - id: core.shell.glob_concat
+    tier: core
+    prompt: |
+      Concatenate all `*.log` files in `logs/` into `merged.txt`.
+    setup:
+      - rm -rf logs merged.txt
+      - mkdir -p logs
+      - printf 'A\n' > logs/a.log
+      - printf 'B\n' > logs/b.log
+      - printf 'C\n' > logs/c.log
+    validate:
+      - test "$(sed -n '1p' merged.txt)" = "A"
+      - test "$(sed -n '2p' merged.txt)" = "B"
+      - test "$(sed -n '3p' merged.txt)" = "C"
+    tags: [globbing, cat]
+
+  - id: core.archive.tar_roundtrip
+    tier: core
+    prompt: |
+      Create `bundle.tar` from directory `pkg/`.
+      Then extract it into `out/`.
+    setup:
+      - rm -rf pkg out bundle.tar
+      - mkdir -p pkg/sub
+      - printf 'left\n' > pkg/a.txt
+      - printf 'right\n' > pkg/sub/b.txt
+    validate:
+      - test -f bundle.tar
+      - test "$(cat out/pkg/a.txt)" = "left"
+      - test "$(cat out/pkg/sub/b.txt)" = "right"
+    tags: [tar, archive]
+
+  - id: core.archive.gzip_roundtrip
+    tier: core
+    prompt: |
+      Create `message.txt.gz` from `message.txt` while keeping `message.txt`.
+      Then produce `restored.txt` containing the original text from the gzip file.
+    setup:
+      - rm -f message.txt message.txt.gz restored.txt
+      - printf 'compress me\n' > message.txt
+    validate:
+      - test -f message.txt
+      - test -f message.txt.gz
+      - test -f restored.txt
+      - test "$(cat restored.txt)" = "compress me"
+    tags: [gzip, gunzip, zcat]
+
+  - id: core.archive.zip_roundtrip
+    tier: core
+    prompt: |
+      Create `archive.zip` from `zsrc/` recursively.
+      Then extract it into `zout/`.
+    setup:
+      - rm -rf zsrc zout archive.zip
+      - mkdir -p zsrc/sub
+      - printf 'one\n' > zsrc/a.txt
+      - printf 'two\n' > zsrc/sub/b.txt
+    validate:
+      - test -f archive.zip
+      - test "$(cat zout/zsrc/a.txt)" = "one"
+      - test "$(cat zout/zsrc/sub/b.txt)" = "two"
+    tags: [zip, unzip]
+
+  - id: core.format.base64_roundtrip
+    tier: core
+    prompt: |
+      Encode `payload.bin` as base64 into `payload.b64`, then decode it into `decoded.bin`.
+    setup:
+      - rm -f payload.bin payload.b64 decoded.bin
+      - printf 'base64 payload\n' > payload.bin
+    validate:
+      - test -f payload.b64
+      - test -f decoded.bin
+      - cmp -s payload.bin decoded.bin
+    tags: [base64]
+
+  - id: core.hash.sha256sum_file
+    tier: core
+    prompt: |
+      Compute the SHA-256 hash of `input.txt` and write only the hex digest to `hash.txt`.
+    setup:
+      - rm -f input.txt hash.txt
+      - printf 'hash-me\n' > input.txt
+    validate:
+      - expected="$(sha256sum input.txt | awk '{print $1}')"; test "$(cat hash.txt)" = "$expected"
+    tags: [sha256sum, hashing]
+
+  - id: core.data.jq_filter_projection
+    tier: core
+    prompt: |
+      `people.json` contains an array of people.
+      Write names of people with `age >= 30` to `names.txt`, sorted ascending, one name per line.
+    setup:
+      - rm -f people.json names.txt
+      - printf '[{"name":"alice","age":31},{"name":"bob","age":24},{"name":"cora","age":35}]\n' > people.json
+    validate:
+      - test "$(sed -n '1p' names.txt)" = "alice"
+      - test "$(sed -n '2p' names.txt)" = "cora"
+      - test "$(wc -l < names.txt | tr -d ' ')" = "2"
+    tags: [jq, json]
+
+  - id: core.data.yq_extract_path
+    tier: core
+    prompt: |
+      Extract `database.host` from `config.yaml` and write it to `host.txt`.
+    setup:
+      - rm -f config.yaml host.txt
+      - "printf 'database:\\n  host: db.internal\\n  port: 5432\\n' > config.yaml"
+    validate:
+      - test "$(cat host.txt)" = "db.internal"
+    tags: [yq, yaml]
+
+  - id: core.network.curl_data_url
+    tier: core
+    prompt: |
+      Use `curl` to fetch `data:text/plain,hello%20general%20profile` and save it to `fetched.txt`.
+    setup:
+      - rm -f fetched.txt
+    validate:
+      - test "$(cat fetched.txt)" = "hello general profile"
+    tags: [curl, network]
+
+  - id: core.utility.timeout_nonzero
+    tier: core
+    prompt: |
+      Run `sleep 3` under a 1-second timeout and write the resulting exit code to `timeout_exit.txt`.
+    setup:
+      - rm -f timeout_exit.txt
+    validate:
+      - code="$(cat timeout_exit.txt)"; test "$code" -gt 0
+    tags: [timeout, sleep]
+
+  - id: probe.command.wget_present
+    tier: gap-probe
+    prompt: |
+      Run `wget --version` and save only the first output line into `wget.txt`.
+    setup:
+      - rm -f wget.txt
+    validate:
+      - test -s wget.txt
+      - head -n 1 wget.txt | grep -q 'Wget'
+    tags: [wget, missing-command-probe]
+
+  - id: probe.shell.background_wait
+    tier: gap-probe
+    prompt: |
+      Start `sleep 1` in the background using `&`, wait for it, then write `done` to `bg.txt`.
+    setup:
+      - rm -f bg.txt
+    validate:
+      - test "$(cat bg.txt)" = "done"
+    tags: [background, job-control, wait]
+
+  - id: probe.shell.command_substitution
+    tier: gap-probe
+    prompt: |
+      Use command substitution `$(...)` to write the current working directory to `cwd.txt`.
+    setup:
+      - rm -f cwd.txt
+    validate:
+      - test "$(cat cwd.txt)" = "$(pwd)"
+    tags: [command-substitution]
+
+  - id: probe.shell.for_loop
+    tier: gap-probe
+    prompt: |
+      Use a shell `for` loop to create `nums.txt` with lines `1`, `2`, `3`.
+    setup:
+      - rm -f nums.txt
+    validate:
+      - test "$(sed -n '1p' nums.txt)" = "1"
+      - test "$(sed -n '2p' nums.txt)" = "2"
+      - test "$(sed -n '3p' nums.txt)" = "3"
+    tags: [for-loop, shell-language]
+
+  - id: probe.shell.function_definition
+    tier: gap-probe
+    prompt: |
+      Define a shell function `greet` that prints `hi`, run it, and save the output to `greet.txt`.
+    setup:
+      - rm -f greet.txt
+    validate:
+      - test "$(cat greet.txt)" = "hi"
+    tags: [function, shell-language]
+
+  - id: probe.command.chmod_symbolic
+    tier: gap-probe
+    prompt: |
+      Make `script.sh` executable using symbolic mode (`chmod u+x ...`).
+    setup:
+      - rm -f script.sh
+      - printf '#!/usr/bin/env bash\necho ok\n' > script.sh
+      - chmod 644 script.sh
+    validate:
+      - test -x script.sh
+    tags: [chmod, symbolic-mode]

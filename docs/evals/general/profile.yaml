@@ -1,0 +1,91 @@
+name: general
+version: 0.1.0
+
+description: >-
+  General-purpose NL-to-shell eval profile for Bash.swift with a broad GNU
+  command cross-section and deterministic validators.
+
+container:
+  dockerfile: docs/evals/general/Dockerfile
+  image: bashswift-eval-general:0.1.0
+  workspace_dir: /workspace
+  shell: /bin/bash
+
+run_limits:
+  max_steps: 25
+  max_wall_time_seconds: 180
+  max_command_output_bytes: 262144
+
+task_bank: docs/evals/general/tasks.yaml
+
+scoring:
+  primary_metric: core_pass_rate
+  include_metrics:
+    - core_pass_rate
+    - gap_probe_pass_rate
+    - unsupported_command_rate
+    - parser_or_language_gap_rate
+    - semantic_mismatch_rate
+    - median_steps_to_pass
+
+tiers:
+  core:
+    gating: true
+    description: Tasks expected to become parity targets for Bash.swift.
+  gap-probe:
+    gating: false
+    description: >-
+      Informational tasks that intentionally probe likely missing tools or shell
+      language features.
+
+command_cross_section:
+  file_and_nav:
+    - ls
+    - mkdir
+    - rm
+    - cp
+    - mv
+    - touch
+    - cat
+    - find
+    - tree
+    - chmod
+  text_and_transform:
+    - grep
+    - rg
+    - sed
+    - awk
+    - cut
+    - tr
+    - sort
+    - uniq
+    - head
+    - tail
+    - wc
+  data_and_network:
+    - jq
+    - yq
+    - curl
+  archives_and_hashing:
+    - tar
+    - gzip
+    - zip
+    - unzip
+    - base64
+    - sha256sum
+  shell_language:
+    - pipes
+    - redirections
+    - command_chains
+    - variable_expansion
+    - globbing
+
+failure_buckets:
+  - missing-command
+  - unsupported-flag
+  - parser-language-gap
+  - pipeline-redirection-mismatch
+  - filesystem-state-mismatch
+  - stdout-stderr-mismatch
+  - exit-code-mismatch
+  - agent-error

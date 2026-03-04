@@ -31,6 +31,7 @@ enum LexToken: Sendable {
     case andIf
     case orIf
     case semicolon
+    case background
     case redirOut
     case redirAppend
     case redirIn
@@ -68,7 +69,7 @@ enum ShellLexer {
             switch last {
             case .word:
                 tokens.append(.semicolon)
-            case .pipe, .andIf, .orIf, .semicolon,
+            case .pipe, .andIf, .orIf, .semicolon, .background,
                  .redirOut, .redirAppend, .redirIn, .redirErrOut, .redirErrAppend,
                  .redirErrToOut, .redirAllOut, .redirAllAppend:
                 break
@@ -165,12 +166,12 @@ enum ShellLexer {
             return .redirErrToOut
         }
 
-        if currentWordIsEmpty, tail.hasPrefix("&>>") {
+        if tail.hasPrefix("&>>") {
             index = input.index(index, offsetBy: 3)
             return .redirAllAppend
         }
 
-        if currentWordIsEmpty, tail.hasPrefix("&>") {
+        if tail.hasPrefix("&>") {
             index = input.index(index, offsetBy: 2)
             return .redirAllOut
         }
@@ -218,6 +219,9 @@ enum ShellLexer {
         case ";":
             index = input.index(after: index)
             return .semicolon
+        case "&":
+            index = input.index(after: index)
+            return .background
         case ">":
             index = input.index(after: index)
             return .redirOut

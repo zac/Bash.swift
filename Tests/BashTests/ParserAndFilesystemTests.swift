@@ -81,6 +81,21 @@ struct ParserAndFilesystemTests {
         #expect(parsed.segments[0].pipeline.count == 1)
     }
 
+    @Test("parser supports background segments")
+    func parserSupportsBackgroundSegments() throws {
+        let parsed = try ShellParser.parse("sleep 1 & echo done")
+        #expect(parsed.segments.count == 2)
+        #expect(parsed.segments[0].runInBackground == true)
+        #expect(parsed.segments[1].connector == .sequence)
+    }
+
+    @Test("parser allows trailing background operator")
+    func parserAllowsTrailingBackgroundOperator() throws {
+        let parsed = try ShellParser.parse("sleep 1 &")
+        #expect(parsed.segments.count == 1)
+        #expect(parsed.segments[0].runInBackground == true)
+    }
+
     @Test("default unix-like layout is created")
     func defaultUnixLikeLayoutIsCreated() async throws {
         let (session, root) = try await TestSupport.makeSession()

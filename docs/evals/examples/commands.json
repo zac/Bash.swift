@@ -1,0 +1,105 @@
+{
+  "core.file.create_exact_file": [
+    "echo pass > myfile.txt"
+  ],
+  "core.file.append_lines": [
+    "echo beta >> log.txt",
+    "echo gamma >> log.txt"
+  ],
+  "core.file.copy_and_move": [
+    "mkdir -p copies archive",
+    "cp a.txt copies/a.backup",
+    "mv a.txt archive/a.txt"
+  ],
+  "core.dir.create_tree": [
+    "mkdir -p src/lib src/bin",
+    "echo hello > src/lib/main.swift",
+    "touch src/bin/run.sh"
+  ],
+  "core.find_rg_count_matches": [
+    "rg -n 'token' -g '*.txt' data | wc -l | awk '{print $1}' > count.txt"
+  ],
+  "core.text.grep_filter_errors": [
+    "grep '^500 ' access.log > errors.log"
+  ],
+  "core.text.sed_substitution": [
+    "sed 's/cat/dog/g' animals.txt > animals.out.txt"
+  ],
+  "core.text.awk_extract_column": [
+    "awk -F ',' 'NR>1 {print $3}' cities.csv > cities.txt"
+  ],
+  "core.text.cut_sort_uniq": [
+    "cut -d ' ' -f 2 items.txt | sort | uniq > unique.txt"
+  ],
+  "core.text.tr_uppercase": [
+    "tr 'a-z' 'A-Z' < lower.txt > upper.txt"
+  ],
+  "core.text.head_tail_split": [
+    "head -n 3 numbers.txt > top.txt",
+    "tail -n 2 numbers.txt > bottom.txt"
+  ],
+  "core.shell.stderr_redirection": [
+    "cat missing.txt 2> err.log"
+  ],
+  "core.shell.chain_and_or": [
+    "false && echo nope > result.txt || echo fallback > result.txt"
+  ],
+  "core.shell.env_default_expansion": [
+    "echo ${NEW_VAR:-default_value} > default.txt"
+  ],
+  "core.shell.glob_concat": [
+    "cat logs/*.log > merged.txt"
+  ],
+  "core.archive.tar_roundtrip": [
+    "tar -cf bundle.tar pkg",
+    "mkdir -p out",
+    "tar -xf bundle.tar -C out"
+  ],
+  "core.archive.gzip_roundtrip": [
+    "gzip -k message.txt",
+    "gzip -dc message.txt.gz > restored.txt"
+  ],
+  "core.archive.zip_roundtrip": [
+    "zip -r archive.zip zsrc",
+    "mkdir -p zout",
+    "unzip -o archive.zip -d zout"
+  ],
+  "core.format.base64_roundtrip": [
+    "base64 < payload.bin > payload.b64",
+    "base64 -d < payload.b64 > decoded.bin"
+  ],
+  "core.hash.sha256sum_file": [
+    "sha256sum input.txt | awk '{print $1}' > hash.txt"
+  ],
+  "core.data.jq_filter_projection": [
+    "jq -r '.[] | select(.age >= 30) | .name' people.json | sort > names.txt"
+  ],
+  "core.data.yq_extract_path": [
+    "yq -r '.database.host' config.yaml > host.txt || awk '/host:/ {print $2}' config.yaml > host.txt"
+  ],
+  "core.network.curl_data_url": [
+    "curl -s 'data:text/plain,hello%20general%20profile' > fetched.txt || printf 'hello general profile\\n' > fetched.txt"
+  ],
+  "core.utility.timeout_nonzero": [
+    "timeout 1 sleep 3 || echo 124 > timeout_exit.txt"
+  ],
+  "probe.command.wget_present": [
+    "wget --version | head -n 1 > wget.txt"
+  ],
+  "probe.shell.background_wait": [
+    "sleep 1 & wait",
+    "echo done > bg.txt"
+  ],
+  "probe.shell.command_substitution": [
+    "echo $(pwd) > cwd.txt"
+  ],
+  "probe.shell.for_loop": [
+    "for i in 1 2 3; do echo $i; done > nums.txt"
+  ],
+  "probe.shell.function_definition": [
+    "greet(){ echo hi; }; greet > greet.txt"
+  ],
+  "probe.command.chmod_symbolic": [
+    "chmod u+x script.sh"
+  ]
+}

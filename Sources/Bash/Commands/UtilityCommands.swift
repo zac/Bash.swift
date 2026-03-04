@@ -136,6 +136,450 @@ struct HistoryCommand: BuiltinCommand {
     }
 }
 
+struct JobsCommand: BuiltinCommand {
+    struct Options: ParsableArguments {}
+
+    static let name = "jobs"
+    static let overview = "List background jobs"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        _ = options
+        guard context.supportsJobControl else {
+            context.writeStderr("jobs: job control is unavailable\n")
+            return 1
+        }
+
+        let jobs = await context.listJobs()
+        for job in jobs {
+            context.writeStdout("[\(job.id)] \(job.pid) \(displayState(job.state)) \(job.commandLine)\n")
+        }
+
+        return 0
+    }
+
+    private static func displayState(_ state: ShellJobState) -> String {
+        switch state {
+        case .running:
+            return "Running"
+        case let .done(exitCode):
+            return exitCode == 0 ? "Done" : "Done(\(exitCode))"
+        }
+    }
+}
+
+struct FgCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional job spec (for example: %1)")
+        var job: String?
+    }
+
+    static let name = "fg"
+    static let overview = "Bring a background job to the foreground"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard context.supportsJobControl else {
+            context.writeStderr("fg: job control is unavailable\n")
+            return 1
+        }
+
+        let requestedID: Int?
+        if let raw = options.job {
+            guard let parsed = parseJobID(raw) else {
+                context.writeStderr("fg: invalid job spec '\(raw)'\n")
+                return 1
+            }
+
+            guard await context.hasJob(id: parsed) else {
+                context.writeStderr("fg: %\(parsed): no such job\n")
+                return 1
+            }
+
+            requestedID = parsed
+        } else {
+            guard await context.hasJobs() else {
+                context.writeStderr("fg: no current job\n")
+                return 1
+            }
+            requestedID = nil
+        }
+
+        guard let completion = await context.foregroundJob(id: requestedID) else {
+            context.writeStderr("fg: failed to foreground job\n")
+            return 1
+        }
+
+        context.stdout.append(completion.result.stdout)
+        context.stderr.append(completion.result.stderr)
+        return completion.result.exitCode
+    }
+}
+
+struct WaitCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional job specs (for example: %1)")
+        var jobs: [String] = []
+    }
+
+    static let name = "wait"
+    static let overview = "Wait for background jobs to complete"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard context.supportsJobControl else {
+            context.writeStderr("wait: job control is unavailable\n")
+            return 1
+        }
+
+        if options.jobs.isEmpty {
+            let completions = await context.waitForAllJobs()
+            return completions.last?.result.exitCode ?? 0
+        }
+
+        var lastExitCode: Int32 = 0
+        for raw in options.jobs {
+            guard let id = parseJobID(raw) else {
+                context.writeStderr("wait: invalid job spec '\(raw)'\n")
+                return 1
+            }
+
+            guard await context.hasJob(id: id) else {
+                context.writeStderr("wait: %\(id): no such job\n")
+                return 127
+            }
+
+            guard let completion = await context.waitForJob(id: id) else {
+                context.writeStderr("wait: %\(id): no such job\n")
+                return 127
+            }
+
+            lastExitCode = completion.result.exitCode
+        }
+
+        return lastExitCode
+    }
+}
+
+struct PsCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: .short, help: "Compatibility flag (no-op in emulated mode)")
+        var e = false
+
+        @Flag(name: .short, help: "Compatibility flag (no-op in emulated mode)")
+        var f = false
+
+        @Flag(name: .short, help: "Compatibility flag (no-op in emulated mode)")
+        var a = false
+
+        @Flag(name: .short, help: "Compatibility flag (no-op in emulated mode)")
+        var x = false
+
+        @Option(name: .short, parsing: .upToNextOption, help: "Filter by pseudo-PID")
+        var p: [String] = []
+
+        @Argument(help: "Compatibility tokens such as 'aux'")
+        var compatibility: [String] = []
+    }
+
+    static let name = "ps"
+    static let overview = "List emulated background processes"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard context.supportsJobControl else {
+            context.writeStderr("ps: process table is unavailable\n")
+            return 1
+        }
+
+        let invalidCompat = options.compatibility.first { token in
+            let normalized = token.lowercased()
+            return normalized != "aux" && normalized != "ax"
+        }
+        if let invalidCompat {
+            context.writeStderr("ps: unsupported argument '\(invalidCompat)'\n")
+            return 1
+        }
+
+        let requestedPIDs = parsePIDFilters(options.p)
+        if requestedPIDs.invalid {
+            context.writeStderr("ps: invalid pid list\n")
+            return 1
+        }
+
+        let snapshots = await context.listJobs()
+        let indexed = Dictionary(uniqueKeysWithValues: snapshots.map { ($0.pid, $0) })
+        let filtered: [ShellJobSnapshot]
+        var missing: [Int] = []
+
+        if requestedPIDs.values.isEmpty {
+            filtered = snapshots
+        } else {
+            var collected: [ShellJobSnapshot] = []
+            for pid in requestedPIDs.values.sorted() {
+                if let snapshot = indexed[pid] {
+                    collected.append(snapshot)
+                } else {
+                    missing.append(pid)
+                }
+            }
+            filtered = collected
+        }
+
+        context.writeStdout("PID JOB STAT COMMAND\n")
+        for snapshot in filtered {
+            let line = "\(snapshot.pid) \(snapshot.id) \(displayStatus(snapshot.state)) \(snapshot.commandLine)\n"
+            context.writeStdout(line)
+        }
+
+        if !missing.isEmpty {
+            for pid in missing {
+                context.writeStderr("ps: \(pid): no such process\n")
+            }
+            return 1
+        }
+
+        return 0
+    }
+
+    private static func displayStatus(_ state: ShellJobState) -> String {
+        switch state {
+        case .running:
+            return "R"
+        case .done:
+            return "Z"
+        }
+    }
+}
+
+struct KillCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Targets and optional signal flags")
+        var args: [String] = []
+    }
+
+    static let name = "kill"
+    static let overview = "Send a signal to emulated background processes"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.args == ["--help"] || options.args == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Send a signal to emulated background processes
+
+                USAGE: kill [-s SIGNAL | -SIGNAL] <pid|%job>...
+                  or:  kill -l [signal_number ...]
+
+                """
+            )
+            return 0
+        }
+
+        guard context.supportsJobControl else {
+            context.writeStderr("kill: process table is unavailable\n")
+            return 1
+        }
+
+        let parsed = parseKillArguments(options.args)
+        switch parsed {
+        case let .failure(message):
+            context.writeStderr("kill: \(message)\n")
+            return 1
+        case let .listSignals(values):
+            if values.isEmpty {
+                context.writeStdout(supportedSignalsLine + "\n")
+                return 0
+            }
+
+            for value in values {
+                guard let number = Int32(value), number >= 0 else {
+                    context.writeStderr("kill: \(value): invalid signal number\n")
+                    return 1
+                }
+
+                guard let resolved = signalName(for: number) else {
+                    context.writeStderr("kill: \(value): invalid signal number\n")
+                    return 1
+                }
+
+                context.writeStdout("\(resolved)\n")
+            }
+            return 0
+        case let .signal(signal, targets):
+            guard !targets.isEmpty else {
+                context.writeStderr("usage: kill [-s signal | -signal] pid | %job ...\n")
+                return 1
+            }
+
+            var allFound = true
+            for target in targets {
+                if target.hasPrefix("%") {
+                    guard let jobID = parseJobID(target) else {
+                        context.writeStderr("kill: \(target): invalid job spec\n")
+                        allFound = false
+                        continue
+                    }
+
+                    let terminated = await context.terminateJob(id: jobID, signal: signal)
+                    if !terminated {
+                        context.writeStderr("kill: \(target): no such job\n")
+                        allFound = false
+                    }
+                } else {
+                    guard let pid = parsePID(target) else {
+                        context.writeStderr("kill: \(target): invalid pid\n")
+                        allFound = false
+                        continue
+                    }
+
+                    let terminated = await context.terminateProcess(pid: pid, signal: signal)
+                    if !terminated {
+                        context.writeStderr("kill: \(pid): no such process\n")
+                        allFound = false
+                    }
+                }
+            }
+
+            return allFound ? 0 : 1
+        }
+    }
+
+    private enum ParsedKillInvocation {
+        case failure(String)
+        case listSignals([String])
+        case signal(Int32, [String])
+    }
+
+    private static func parseKillArguments(_ args: [String]) -> ParsedKillInvocation {
+        var index = 0
+        var signal: Int32 = 15
+        var targets: [String] = []
+        var listSignals = false
+        var listSignalValues: [String] = []
+        var parseOptions = true
+
+        while index < args.count {
+            let token = args[index]
+
+            if parseOptions, token == "--" {
+                parseOptions = false
+                index += 1
+                continue
+            }
+
+            if parseOptions, token == "-l" || token == "--list" {
+                listSignals = true
+                index += 1
+                continue
+            }
+
+            if parseOptions, token == "-s" || token == "--signal" {
+                let next = index + 1
+                guard next < args.count else {
+                    return .failure("option requires an argument -- s")
+                }
+
+                guard let parsed = parseSignalToken(args[next]) else {
+                    return .failure("invalid signal '\(args[next])'")
+                }
+                signal = parsed
+                index += 2
+                continue
+            }
+
+            if parseOptions, token.hasPrefix("-"), token.count > 1 {
+                let candidate = String(token.dropFirst())
+                if let parsed = parseSignalToken(candidate) {
+                    signal = parsed
+                    index += 1
+                    continue
+                }
+            }
+
+            if listSignals, token != "-l", token != "--list" {
+                listSignalValues.append(token)
+            } else {
+                targets.append(token)
+            }
+            index += 1
+        }
+
+        if listSignals {
+            return .listSignals(listSignalValues)
+        }
+
+        return .signal(signal, targets)
+    }
+}
+
+private func parseJobID(_ raw: String) -> Int? {
+    guard !raw.isEmpty else {
+        return nil
+    }
+
+    let token: Substring
+    if raw.hasPrefix("%") {
+        token = raw.dropFirst()
+        guard !token.isEmpty else {
+            return nil
+        }
+    } else {
+        token = Substring(raw)
+    }
+
+    guard let id = Int(token), id > 0 else {
+        return nil
+    }
+
+    return id
+}
+
+private func parsePID(_ raw: String) -> Int? {
+    guard let pid = Int(raw), pid > 0 else {
+        return nil
+    }
+    return pid
+}
+
+private func parsePIDFilters(_ rawValues: [String]) -> (values: Set<Int>, invalid: Bool) {
+    var values: Set<Int> = []
+
+    for token in rawValues {
+        for rawPart in token.split(separator: ",", omittingEmptySubsequences: true) {
+            guard let parsed = parsePID(String(rawPart)) else {
+                return ([], true)
+            }
+            values.insert(parsed)
+        }
+    }
+
+    return (values, false)
+}
+
+private let supportedSignals: [(name: String, number: Int32)] = [
+    ("HUP", 1),
+    ("INT", 2),
+    ("QUIT", 3),
+    ("KILL", 9),
+    ("TERM", 15),
+    ("CONT", 18),
+    ("STOP", 19),
+]
+
+private let supportedSignalsLine = supportedSignals.map(\.name).joined(separator: " ")
+
+private func parseSignalToken(_ token: String) -> Int32? {
+    if let number = Int32(token), number >= 0 {
+        return number
+    }
+
+    let normalized = token.uppercased().hasPrefix("SIG")
+        ? String(token.uppercased().dropFirst(3))
+        : token.uppercased()
+
+    return supportedSignals.first(where: { $0.name == normalized })?.number
+}
+
+private func signalName(for number: Int32) -> String? {
+    supportedSignals.first(where: { $0.number == number })?.name
+}
+
 struct SeqCommand: BuiltinCommand {
     struct Options: ParsableArguments {
         @Option(name: .short, help: "Use separator string")

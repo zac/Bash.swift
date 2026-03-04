@@ -16,6 +16,7 @@ enum ShellExecutor {
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         enableGlobbing: Bool,
+        jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -41,6 +42,59 @@ enum ShellExecutor {
                 continue
             }
 
+            if segment.runInBackground {
+                let rendered = renderSegment(segment)
+                if let jobControl {
+                    let backgroundDirectory = currentDirectory
+                    let backgroundEnvironment = environment
+                    let backgroundHistory = history
+                    let backgroundRegistry = commandRegistry
+                    let backgroundFilesystem = filesystem
+                    let backgroundInput = stdin
+                    let backgroundEnableGlobbing = enableGlobbing
+                    let backgroundSecretPolicy = secretPolicy
+                    let backgroundSecretResolver = secretResolver
+                    let backgroundRedactor = secretOutputRedactor
+
+                    let launch = await jobControl.launchBackgroundJob(commandLine: rendered) {
+                        var isolatedDirectory = backgroundDirectory
+                        var isolatedEnvironment = backgroundEnvironment
+                        let localTracker = backgroundSecretPolicy == .off ? nil : SecretExposureTracker()
+
+                        var result = await executePipeline(
+                            commands: segment.pipeline,
+                            initialInput: backgroundInput,
+                            filesystem: backgroundFilesystem,
+                            currentDirectory: &isolatedDirectory,
+                            environment: &isolatedEnvironment,
+                            history: backgroundHistory,
+                            commandRegistry: backgroundRegistry,
+                            enableGlobbing: backgroundEnableGlobbing,
+                            jobControl: nil,
+                            secretPolicy: backgroundSecretPolicy,
+                            secretResolver: backgroundSecretResolver,
+                            secretTracker: localTracker,
+                            secretOutputRedactor: backgroundRedactor
+                        )
+
+                        if let localTracker {
+                            result = await redactCommandResult(
+                                result,
+                                secretTracker: localTracker,
+                                secretOutputRedactor: backgroundRedactor
+                            )
+                        }
+
+                        return result
+                    }
+
+                    environment["!"] = String(launch.pid)
+                    aggregateOut.append(Data("[\(launch.jobID)] \(launch.pid)\n".utf8))
+                    lastExitCode = 0
+                    continue
+                }
+            }
+
             let segmentResult = await executePipeline(
                 commands: segment.pipeline,
                 initialInput: stdin,
@@ -50,6 +104,7 @@ enum ShellExecutor {
                 history: history,
                 commandRegistry: commandRegistry,
                 enableGlobbing: enableGlobbing,
+                jobControl: jobControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -92,6 +147,7 @@ enum ShellExecutor {
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         enableGlobbing: Bool,
+        jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -111,6 +167,7 @@ enum ShellExecutor {
                 history: history,
                 commandRegistry: commandRegistry,
                 enableGlobbing: enableGlobbing,
+                jobControl: jobControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -136,6 +193,7 @@ enum ShellExecutor {
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         enableGlobbing: Bool,
+        jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -194,7 +252,8 @@ enum ShellExecutor {
             currentDirectory: currentDirectory,
             environment: environment,
             stdin: input,
-            secretTracker: secretTracker
+            secretTracker: secretTracker,
+            jobControl: jobControl
         )
 
         let exitCode = await implementation.runCommand(&context, commandArgs)
@@ -307,6 +366,41 @@ enum ShellExecutor {
         return result
     }
 
+    private static func renderSegment(_ segment: ParsedSegment) -> String {
+        segment.pipeline.map(renderCommand).joined(separator: " | ")
+    }
+
+    private static func renderCommand(_ command: ParsedCommand) -> String {
+        var parts = command.words.map(\.rawValue)
+
+        for redirection in command.redirections {
+            switch redirection.type {
+            case .stdin:
+                parts.append("<")
+            case .stdoutTruncate:
+                parts.append(">")
+            case .stdoutAppend:
+                parts.append(">>")
+            case .stderrTruncate:
+                parts.append("2>")
+            case .stderrAppend:
+                parts.append("2>>")
+            case .stderrToStdout:
+                parts.append("2>&1")
+            case .stdoutAndErrTruncate:
+                parts.append("&>")
+            case .stdoutAndErrAppend:
+                parts.append("&>>")
+            }
+
+            if let target = redirection.target {
+                parts.append(target.rawValue)
+            }
+        }
+
+        return parts.joined(separator: " ")
+    }
+
     private static func resolveCommand(named commandName: String, registry: [String: AnyBuiltinCommand]) -> AnyBuiltinCommand? {
         if commandName.hasPrefix("/") {
             let base = PathUtils.basename(commandName)
@@ -322,6 +416,27 @@ enum ShellExecutor {
         }
 
         return nil
+    }
+
+    private static func redactCommandResult(
+        _ result: CommandResult,
+        secretTracker: SecretExposureTracker?,
+        secretOutputRedactor: any SecretOutputRedacting
+    ) async -> CommandResult {
+        guard let secretTracker else {
+            return result
+        }
+
+        let replacements = await secretTracker.snapshot()
+        guard !replacements.isEmpty else {
+            return result
+        }
+
+        return CommandResult(
+            stdout: secretOutputRedactor.redact(data: result.stdout, replacements: replacements),
+            stderr: secretOutputRedactor.redact(data: result.stderr, replacements: replacements),
+            exitCode: result.exitCode
+        )
     }
 
     private static func expandWords(
@@ -425,6 +540,12 @@ enum ShellExecutor {
             guard next < string.endIndex else {
                 result.append("$")
                 break
+            }
+
+            if string[next] == "!" {
+                result += environment["!"] ?? ""
+                index = string.index(after: next)
+                continue
             }
 
             if string[next] == "{" {

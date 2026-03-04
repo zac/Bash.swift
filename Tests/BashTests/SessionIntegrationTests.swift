@@ -410,6 +410,126 @@ struct SessionIntegrationTests {
         #expect(timeout.stderrString.contains("timed out"))
     }
 
+    @Test("background jobs can be listed and foregrounded")
+    func backgroundJobsCanBeListedAndForegrounded() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let launched = await session.run("sleep 0.05 &")
+        #expect(launched.exitCode == 0)
+        #expect(launched.stdoutString.contains("[1]"))
+
+        let jobs = await session.run("jobs")
+        #expect(jobs.exitCode == 0)
+        #expect(jobs.stdoutString.contains("[1]"))
+        #expect(jobs.stdoutString.contains("sleep 0.05"))
+
+        let foregrounded = await session.run("fg %1")
+        #expect(foregrounded.exitCode == 0)
+
+        let jobsAfter = await session.run("jobs")
+        #expect(jobsAfter.exitCode == 0)
+        #expect(jobsAfter.stdoutString.isEmpty)
+    }
+
+    @Test("foreground and wait return background output and status")
+    func foregroundAndWaitReturnBackgroundOutputAndStatus() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let echoed = await session.run("echo hi &")
+        #expect(echoed.exitCode == 0)
+
+        let fg = await session.run("fg")
+        #expect(fg.exitCode == 0)
+        #expect(fg.stdoutString == "hi\n")
+
+        _ = await session.run("timeout 0.01 sleep 0.05 &")
+        let waited = await session.run("wait")
+        #expect(waited.exitCode == 124)
+
+        let missing = await session.run("wait %1")
+        #expect(missing.exitCode == 127)
+        #expect(missing.stderrString.contains("no such job"))
+    }
+
+    @Test("last background pid expansion and ps lookup")
+    func lastBackgroundPIDExpansionAndPSLookup() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let launched = await session.run("sleep 0.05 & echo $!")
+        #expect(launched.exitCode == 0)
+
+        let lines = launched.stdoutString
+            .split(separator: "\n")
+            .map(String.init)
+        #expect(lines.count >= 2)
+        #expect(lines[0].contains("[1]"))
+
+        guard let pid = Int(lines[1]) else {
+            Issue.record("expected numeric pseudo pid in $! output")
+            return
+        }
+
+        let ps = await session.run("ps -p \(pid)")
+        #expect(ps.exitCode == 0)
+        #expect(ps.stdoutString.contains("PID JOB STAT COMMAND"))
+        #expect(ps.stdoutString.contains("sleep 0.05"))
+        #expect(ps.stdoutString.contains("\(pid)"))
+    }
+
+    @Test("kill by pid and job spec")
+    func killByPIDAndJobSpec() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let launched = await session.run("sleep 5 &")
+        #expect(launched.exitCode == 0)
+
+        let pieces = launched.stdoutString
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .map(String.init)
+        guard pieces.count >= 2, let pid = Int(pieces[1]) else {
+            Issue.record("expected launch output to include pseudo pid")
+            return
+        }
+
+        let killByPID = await session.run("kill \(pid)")
+        #expect(killByPID.exitCode == 0)
+
+        let waited = await session.run("wait %1")
+        #expect(waited.exitCode == 143)
+
+        let relaunched = await session.run("sleep 5 &")
+        #expect(relaunched.exitCode == 0)
+
+        let relaunchPieces = relaunched.stdoutString
+            .split(whereSeparator: { $0 == " " || $0 == "\n" || $0 == "\t" })
+            .map(String.init)
+        guard relaunchPieces.count >= 2 else {
+            Issue.record("expected second launch output to include job id and pseudo pid")
+            return
+        }
+
+        let rawJobToken = relaunchPieces[0]
+            .trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+        guard let jobID = Int(rawJobToken) else {
+            Issue.record("expected second launch output to include numeric job id")
+            return
+        }
+
+        let killByJob = await session.run("kill %\(jobID)")
+        #expect(killByJob.exitCode == 0)
+
+        let waitJob = await session.run("wait %\(jobID)")
+        #expect(waitJob.exitCode == 143)
+
+        let signals = await session.run("kill -l")
+        #expect(signals.exitCode == 0)
+        #expect(signals.stdoutString.contains("TERM"))
+    }
+
     @Test("diff command shows differences and status")
     func diffCommandShowsDifferencesAndStatus() async throws {
         let (session, root) = try await TestSupport.makeSession()

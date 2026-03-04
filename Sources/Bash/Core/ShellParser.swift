@@ -30,6 +30,7 @@ enum ChainOperator: Sendable {
 struct ParsedSegment: Sendable {
     let connector: ChainOperator?
     let pipeline: [ParsedCommand]
+    let runInBackground: Bool
 }
 
 struct ParsedLine: Sendable {
@@ -48,14 +49,28 @@ enum ShellParser {
         var nextConnector: ChainOperator? = nil
 
         while index < tokens.count {
+            let connector = nextConnector
             let pipeline = try parsePipeline(tokens: tokens, index: &index)
-            segments.append(ParsedSegment(connector: nextConnector, pipeline: pipeline))
+            var runInBackground = false
 
-            guard index < tokens.count else { break }
+            guard index < tokens.count else {
+                segments.append(
+                    ParsedSegment(
+                        connector: connector,
+                        pipeline: pipeline,
+                        runInBackground: runInBackground
+                    )
+                )
+                break
+            }
 
             let operatorToken = tokens[index]
             switch operatorToken {
             case .semicolon:
+                nextConnector = .sequence
+                index += 1
+            case .background:
+                runInBackground = true
                 nextConnector = .sequence
                 index += 1
             case .andIf:
@@ -68,8 +83,19 @@ enum ShellParser {
                 throw ShellError.parserError("unexpected token in command chain")
             }
 
+            segments.append(
+                ParsedSegment(
+                    connector: connector,
+                    pipeline: pipeline,
+                    runInBackground: runInBackground
+                )
+            )
+
             if index == tokens.count {
                 if case .semicolon = operatorToken {
+                    break
+                }
+                if case .background = operatorToken {
                     break
                 }
                 throw ShellError.parserError("trailing chain operator")
@@ -135,7 +161,7 @@ enum ShellParser {
                 index += 1
                 let target = try takeRedirectionTarget(tokens: tokens, index: &index)
                 redirections.append(Redirection(type: .stdoutAndErrAppend, target: target))
-            case .pipe, .semicolon, .andIf, .orIf:
+            case .pipe, .semicolon, .background, .andIf, .orIf:
                 if words.isEmpty {
                     throw ShellError.parserError("expected command before operator")
                 }

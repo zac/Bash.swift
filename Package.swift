@@ -34,6 +34,7 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
+        .package(url: "https://github.com/jpsim/Yams", from: "5.1.3"),
     ],
     targets: [
         .binaryTarget(
@@ -105,6 +106,14 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedFramework("Security")
+            ]
+        ),
+        .executableTarget(
+            name: "BashEvalRunner",
+            dependencies: [
+                "Bash",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "Yams", package: "Yams"),
             ]
         ),
         .testTarget(

@@ -18,6 +18,7 @@ public struct CommandContext: Sendable {
     public var stdout: Data
     public var stderr: Data
     let secretTracker: SecretExposureTracker?
+    let jobControl: (any ShellJobControlling)?
 
     public init(
         commandName: String,
@@ -50,7 +51,8 @@ public struct CommandContext: Sendable {
             stdin: stdin,
             stdout: stdout,
             stderr: stderr,
-            secretTracker: nil
+            secretTracker: nil,
+            jobControl: nil
         )
     }
 
@@ -69,7 +71,8 @@ public struct CommandContext: Sendable {
         stdin: Data,
         stdout: Data = Data(),
         stderr: Data = Data(),
-        secretTracker: SecretExposureTracker?
+        secretTracker: SecretExposureTracker?,
+        jobControl: (any ShellJobControlling)? = nil
     ) {
         self.commandName = commandName
         self.arguments = arguments
@@ -86,6 +89,7 @@ public struct CommandContext: Sendable {
         self.stdout = stdout
         self.stderr = stderr
         self.secretTracker = secretTracker
+        self.jobControl = jobControl
     }
 
     public mutating func writeStdout(_ string: String) {
@@ -205,7 +209,8 @@ public struct CommandContext: Sendable {
             currentDirectory: currentDirectory,
             environment: environment,
             stdin: stdin ?? self.stdin,
-            secretTracker: secretTracker
+            secretTracker: secretTracker,
+            jobControl: jobControl
         )
 
         let exitCode = await implementation.runCommand(&childContext, commandArgs)
@@ -230,6 +235,80 @@ public struct CommandContext: Sendable {
         }
 
         return nil
+    }
+
+    var supportsJobControl: Bool {
+        jobControl != nil
+    }
+
+    func listJobs() async -> [ShellJobSnapshot] {
+        guard let jobControl else {
+            return []
+        }
+        return await jobControl.listJobs()
+    }
+
+    func hasJobs() async -> Bool {
+        guard let jobControl else {
+            return false
+        }
+        return await jobControl.hasJobs()
+    }
+
+    func hasJob(id: Int) async -> Bool {
+        guard let jobControl else {
+            return false
+        }
+        return await jobControl.hasJob(id: id)
+    }
+
+    func hasProcess(pid: Int) async -> Bool {
+        guard let jobControl else {
+            return false
+        }
+        return await jobControl.hasProcess(pid: pid)
+    }
+
+    func snapshotForProcess(pid: Int) async -> ShellJobSnapshot? {
+        guard let jobControl else {
+            return nil
+        }
+        return await jobControl.processSnapshot(pid: pid)
+    }
+
+    func foregroundJob(id: Int?) async -> ShellJobCompletion? {
+        guard let jobControl else {
+            return nil
+        }
+        return await jobControl.foreground(jobID: id)
+    }
+
+    func waitForJob(id: Int) async -> ShellJobCompletion? {
+        guard let jobControl else {
+            return nil
+        }
+        return await jobControl.waitForJob(id: id)
+    }
+
+    func waitForAllJobs() async -> [ShellJobCompletion] {
+        guard let jobControl else {
+            return []
+        }
+        return await jobControl.waitForAllJobs()
+    }
+
+    func terminateJob(id: Int, signal: Int32) async -> Bool {
+        guard let jobControl else {
+            return false
+        }
+        return await jobControl.terminate(reference: .jobID(id), signal: signal)
+    }
+
+    func terminateProcess(pid: Int, signal: Int32) async -> Bool {
+        guard let jobControl else {
+            return false
+        }
+        return await jobControl.terminate(reference: .pid(pid), signal: signal)
     }
 }
 

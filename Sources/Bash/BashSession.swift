@@ -3,6 +3,7 @@ import Foundation
 public final actor BashSession {
     private let filesystemStore: any ShellFilesystem
     private let options: SessionOptions
+    private let jobManager: ShellJobManager
 
     private var currentDirectoryStore: String
     private var environmentStore: [String: String]
@@ -66,6 +67,7 @@ public final actor BashSession {
                 history: history,
                 commandRegistry: registry,
                 enableGlobbing: enableGlobbing,
+                jobControl: jobManager,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -155,6 +157,7 @@ public final actor BashSession {
     private init(options: SessionOptions, configuredFilesystem: any ShellFilesystem) async throws {
         self.options = options
         filesystemStore = configuredFilesystem
+        jobManager = ShellJobManager()
 
         commandRegistry = [:]
         historyStore = []

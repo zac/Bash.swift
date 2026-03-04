@@ -26,7 +26,7 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 - Stateful shell session (`cd`, `export`, `history` persist across `run` calls)
 - Real filesystem side effects under a controlled root directory
 - Built-in fake CLIs implemented in Swift (no subprocess dependency)
-- Shell parsing/execution features needed for scripts (`|`, redirection, `&&`, `||`, `;`)
+- Shell parsing/execution features needed for scripts (`|`, redirection, `&&`, `||`, `;`, `&`)
 
 ## Installation
 
@@ -243,7 +243,8 @@ Execution pipeline:
 - Pipes: `cmd1 | cmd2`
 - Redirections: `>`, `>>`, `<`, `2>`, `2>&1`
 - Command chaining: `&&`, `||`, `;`
-- Variables: `$VAR`, `${VAR}`, `${VAR:-default}`
+- Background execution: `&` with `jobs`, `fg`, `wait`
+- Variables: `$VAR`, `${VAR}`, `${VAR:-default}`, `$!` (last background pseudo-PID)
 - Globs: `*`, `?`, `[abc]` (when `enableGlobbing` is true)
 - Command lookup by name and by path-like invocation (`/bin/ls`)
 
@@ -253,6 +254,7 @@ Execution pipeline:
 - `if/then/elif/else/fi`
 - `for/while/until`
 - Shell functions and `local`
+- Full POSIX job-control signals/states (`bg`, `disown`, signal forwarding)
 
 ## Filesystem Model
 
@@ -402,13 +404,18 @@ All implemented commands support `--help`.
 | `clear` | none |
 | `date` | `-u` |
 | `false` | none |
+| `fg` | optional job spec (`fg`, `fg %1`) |
 | `help` | optional command name (`help <command>`) |
 | `history` | `-n`, `--n` |
+| `jobs` | none |
+| `kill` | `kill [-s SIGNAL | -SIGNAL] <pid|%job>...`, `kill -l` |
+| `ps` | `ps`, `ps -p <pid[,pid...]>`, compatibility flags `-e`, `-f`, `-a`, `-x`, `aux` |
 | `seq` | `-s <separator>`, `-w`, positional numeric args |
 | `sleep` | positional durations (`NUMBER[SUFFIX]`, suffix: `s`, `m`, `h`, `d`) |
 | `time` | `time <command...>` |
 | `timeout` | `timeout <seconds> <command...>` |
 | `true` | none |
+| `wait` | optional job specs (`wait`, `wait %1`) |
 | `whoami` | none |
 | `which` | `-a`, `-s`, positional command names |
 
