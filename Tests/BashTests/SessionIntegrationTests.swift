@@ -54,6 +54,78 @@ struct SessionIntegrationTests {
         #expect(fallback.stdoutString == "fallback\n")
     }
 
+    @Test("command substitution writes evaluated output")
+    func commandSubstitutionWritesEvaluatedOutput() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let write = await session.run("echo $(pwd) > cwd.txt")
+        #expect(write.exitCode == 0)
+
+        let read = await session.run("cat cwd.txt")
+        #expect(read.exitCode == 0)
+        #expect(read.stdoutString == "/home/user\n")
+    }
+
+    @Test("pwd can map root-only virtual paths to a host workspace path")
+    func pwdCanMapRootOnlyVirtualPathsToAHostWorkspacePath() async throws {
+        let root = try TestSupport.makeTempDirectory()
+        defer { TestSupport.removeDirectory(root) }
+
+        let session = try await BashSession(
+            rootDirectory: root,
+            options: SessionOptions(
+                layout: .rootOnly,
+                initialEnvironment: ["BASHSWIFT_PWD_HOST_ROOT": root.path]
+            )
+        )
+
+        let top = await session.run("pwd")
+        #expect(top.exitCode == 0)
+        #expect(top.stdoutString == "\(root.path)\n")
+
+        let nested = await session.run("mkdir -p nested && cd nested && pwd")
+        #expect(nested.exitCode == 0)
+        #expect(nested.stdoutString == "\(root.path)/nested\n")
+    }
+
+    @Test("simple for loop executes and supports output redirection")
+    func simpleForLoopExecutesAndSupportsOutputRedirection() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let loop = await session.run("for i in 1 2 3; do echo $i; done > nums.txt")
+        #expect(loop.exitCode == 0)
+        #expect(loop.stdoutString.isEmpty)
+
+        let file = await session.run("cat nums.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "1\n2\n3\n")
+    }
+
+    @Test("function definition can be invoked later in the same line")
+    func functionDefinitionCanBeInvokedLaterInTheSameLine() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("greet(){ echo hi; }; greet > greet.txt")
+        #expect(result.exitCode == 0)
+
+        let file = await session.run("cat greet.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "hi\n")
+    }
+
+    @Test("wget version output includes Wget marker")
+    func wgetVersionOutputIncludesWgetMarker() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("wget --version | head -n 1")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString.contains("Wget"))
+    }
+
     @Test("cd and pwd with semicolon chaining")
     func cdPwdAndSemicolonChaining() async throws {
         let (session, root) = try await TestSupport.makeSession()

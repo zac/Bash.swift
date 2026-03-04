@@ -210,13 +210,29 @@ struct SystemBashEngine: CandidateEngine {
 }
 
 final class BashSwiftEngine: CandidateEngine {
+    private static let pwdHostRootEnvKey = "BASHSWIFT_PWD_HOST_ROOT"
     private let session: BashSession
     private let maxOutputBytes: Int
 
     init(workspaceURL: URL, maxOutputBytes: Int) async throws {
+        let hostRootProbe = try await ProcessCommandRunner.run(
+            command: "pwd",
+            workspaceURL: workspaceURL,
+            maxOutputBytes: 4_096,
+            extraEnvironment: nil
+        )
+        let hostRoot = hostRootProbe.stdout
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let effectiveHostRoot = hostRoot.isEmpty
+            ? workspaceURL.standardizedFileURL.path
+            : hostRoot
+
         session = try await BashSession(
             rootDirectory: workspaceURL,
-            options: SessionOptions(layout: .rootOnly)
+            options: SessionOptions(
+                layout: .rootOnly,
+                initialEnvironment: [Self.pwdHostRootEnvKey: effectiveHostRoot]
+            )
         )
         self.maxOutputBytes = maxOutputBytes
     }

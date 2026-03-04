@@ -1423,11 +1423,36 @@ struct PrintenvCommand: BuiltinCommand {
 struct PwdCommand: BuiltinCommand {
     struct Options: ParsableArguments {}
 
+    private static let hostRootEnvKey = "BASHSWIFT_PWD_HOST_ROOT"
+
     static let name = "pwd"
     static let overview = "Print current working directory"
 
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
-        context.writeStdout("\(context.currentDirectory)\n")
+        let renderedPath: String
+        if let hostRoot = context.environment[hostRootEnvKey],
+           !hostRoot.isEmpty,
+           hostRoot.hasPrefix("/") {
+            let normalizedHostRoot: String
+            if hostRoot == "/" {
+                normalizedHostRoot = "/"
+            } else if hostRoot.hasSuffix("/") {
+                normalizedHostRoot = String(hostRoot.dropLast())
+            } else {
+                normalizedHostRoot = hostRoot
+            }
+            if context.currentDirectory == "/" {
+                renderedPath = normalizedHostRoot
+            } else if normalizedHostRoot == "/" {
+                renderedPath = context.currentDirectory
+            } else {
+                renderedPath = normalizedHostRoot + context.currentDirectory
+            }
+        } else {
+            renderedPath = context.currentDirectory
+        }
+
+        context.writeStdout("\(renderedPath)\n")
         return 0
     }
 }

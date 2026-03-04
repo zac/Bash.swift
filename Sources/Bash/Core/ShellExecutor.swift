@@ -15,6 +15,7 @@ enum ShellExecutor {
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
+        shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
@@ -69,6 +70,7 @@ enum ShellExecutor {
                             environment: &isolatedEnvironment,
                             history: backgroundHistory,
                             commandRegistry: backgroundRegistry,
+                            shellFunctions: shellFunctions,
                             enableGlobbing: backgroundEnableGlobbing,
                             jobControl: nil,
                             secretPolicy: backgroundSecretPolicy,
@@ -103,6 +105,7 @@ enum ShellExecutor {
                 environment: &environment,
                 history: history,
                 commandRegistry: commandRegistry,
+                shellFunctions: shellFunctions,
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
                 secretPolicy: secretPolicy,
@@ -146,6 +149,7 @@ enum ShellExecutor {
         environment: inout [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
+        shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
@@ -166,6 +170,7 @@ enum ShellExecutor {
                 environment: &environment,
                 history: history,
                 commandRegistry: commandRegistry,
+                shellFunctions: shellFunctions,
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
                 secretPolicy: secretPolicy,
@@ -192,6 +197,7 @@ enum ShellExecutor {
         environment: inout [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
+        shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         secretPolicy: SecretHandlingPolicy,
@@ -234,34 +240,54 @@ enum ShellExecutor {
 
         let commandArgs = Array(expandedWords.dropFirst())
 
-        guard let implementation = resolveCommand(named: commandName, registry: commandRegistry) else {
+        var result: CommandResult
+        if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
+            var context = CommandContext(
+                commandName: commandName,
+                arguments: commandArgs,
+                filesystem: filesystem,
+                enableGlobbing: enableGlobbing,
+                secretPolicy: secretPolicy,
+                secretResolver: secretResolver,
+                availableCommands: commandRegistry.keys.sorted(),
+                commandRegistry: commandRegistry,
+                history: history,
+                currentDirectory: currentDirectory,
+                environment: environment,
+                stdin: input,
+                secretTracker: secretTracker,
+                jobControl: jobControl
+            )
+
+            let exitCode = await implementation.runCommand(&context, commandArgs)
+            result = CommandResult(
+                stdout: context.stdout,
+                stderr: context.stderr,
+                exitCode: exitCode
+            )
+            currentDirectory = context.currentDirectory
+            environment = context.environment
+        } else if let functionBody = shellFunctions[commandName] {
+            result = await executeShellFunction(
+                functionBody,
+                stdin: input,
+                filesystem: filesystem,
+                currentDirectory: &currentDirectory,
+                environment: &environment,
+                history: history,
+                commandRegistry: commandRegistry,
+                shellFunctions: shellFunctions,
+                enableGlobbing: enableGlobbing,
+                jobControl: jobControl,
+                secretPolicy: secretPolicy,
+                secretResolver: secretResolver,
+                secretTracker: secretTracker,
+                secretOutputRedactor: secretOutputRedactor
+            )
+        } else {
             let message = "\(commandName): command not found\n"
             return CommandResult(stdout: Data(), stderr: Data(message.utf8), exitCode: 127)
         }
-
-        var context = CommandContext(
-            commandName: commandName,
-            arguments: commandArgs,
-            filesystem: filesystem,
-            enableGlobbing: enableGlobbing,
-            secretPolicy: secretPolicy,
-            secretResolver: secretResolver,
-            availableCommands: commandRegistry.keys.sorted(),
-            commandRegistry: commandRegistry,
-            history: history,
-            currentDirectory: currentDirectory,
-            environment: environment,
-            stdin: input,
-            secretTracker: secretTracker,
-            jobControl: jobControl
-        )
-
-        let exitCode = await implementation.runCommand(&context, commandArgs)
-
-        var result = CommandResult(stdout: context.stdout, stderr: context.stderr, exitCode: exitCode)
-
-        currentDirectory = context.currentDirectory
-        environment = context.environment
 
         for redirection in command.redirections where redirection.type != .stdin {
             switch redirection.type {
@@ -364,6 +390,55 @@ enum ShellExecutor {
         }
 
         return result
+    }
+
+    private static func executeShellFunction(
+        _ body: String,
+        stdin: Data,
+        filesystem: any ShellFilesystem,
+        currentDirectory: inout String,
+        environment: inout [String: String],
+        history: [String],
+        commandRegistry: [String: AnyBuiltinCommand],
+        shellFunctions: [String: String],
+        enableGlobbing: Bool,
+        jobControl: (any ShellJobControlling)?,
+        secretPolicy: SecretHandlingPolicy,
+        secretResolver: (any SecretReferenceResolving)?,
+        secretTracker: SecretExposureTracker?,
+        secretOutputRedactor: any SecretOutputRedacting
+    ) async -> CommandResult {
+        let parsedBody: ParsedLine
+        do {
+            parsedBody = try ShellParser.parse(body)
+        } catch {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(error)\n".utf8),
+                exitCode: 2
+            )
+        }
+
+        let execution = await execute(
+            parsedLine: parsedBody,
+            stdin: stdin,
+            filesystem: filesystem,
+            currentDirectory: currentDirectory,
+            environment: environment,
+            history: history,
+            commandRegistry: commandRegistry,
+            shellFunctions: shellFunctions,
+            enableGlobbing: enableGlobbing,
+            jobControl: jobControl,
+            secretPolicy: secretPolicy,
+            secretResolver: secretResolver,
+            secretTracker: secretTracker,
+            secretOutputRedactor: secretOutputRedactor
+        )
+
+        currentDirectory = execution.currentDirectory
+        environment = execution.environment
+        return execution.result
     }
 
     private static func renderSegment(_ segment: ParsedSegment) -> String {

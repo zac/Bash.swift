@@ -56,6 +56,7 @@ extension BashSession {
             PwdCommand.self,
             TeeCommand.self,
             CurlCommand.self,
+            WgetCommand.self,
             HtmlToMarkdownCommand.self,
             ClearCommand.self,
             DateCommand.self,

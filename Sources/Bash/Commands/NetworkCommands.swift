@@ -1194,3 +1194,158 @@ struct CurlCommand: BuiltinCommand {
         return code
     }
 }
+
+struct WgetCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: [.long], help: "Display version information and exit")
+        var version = false
+
+        @Flag(name: [.short, .long], help: "Quiet mode")
+        var quiet = false
+
+        @Option(name: [.short, .customLong("output-document")], help: "Write documents to FILE")
+        var outputDocument: String?
+
+        @Option(name: [.customLong("user-agent")], help: "Set User-Agent")
+        var userAgent: String?
+
+        @Argument(help: "URL to fetch")
+        var url: String?
+    }
+
+    static let name = "wget"
+    static let overview = "Retrieve files from the web"
+
+    static func _toAnyBuiltinCommand() -> AnyBuiltinCommand {
+        AnyBuiltinCommand(
+            name: name,
+            aliases: aliases,
+            overview: overview
+        ) { context, args in
+            let normalized = normalizeAttachedValueOptions(args)
+            do {
+                let options = try Options.parse(normalized)
+                return await run(context: &context, options: options)
+            } catch {
+                let message = Options.fullMessage(for: error)
+                if !message.isEmpty {
+                    let output = message.hasSuffix("\n") ? message : message + "\n"
+                    let exitCode = Options.exitCode(for: error).rawValue
+                    if exitCode == 0 {
+                        context.writeStdout(output)
+                    } else {
+                        context.writeStderr(output)
+                    }
+                }
+                return Options.exitCode(for: error).rawValue
+            }
+        }
+    }
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.version {
+            context.writeStdout("GNU Wget 1.24.5 (Bash.swift)\n")
+            context.writeStdout("Built-in emulation command\n")
+            return 0
+        }
+
+        guard let rawURL = options.url, !rawURL.isEmpty else {
+            context.writeStderr("wget: missing URL\n")
+            return 2
+        }
+
+        var argv: [String] = ["curl", "-L"]
+        if options.quiet {
+            argv.append("-s")
+        }
+
+        if let userAgent = options.userAgent, !userAgent.isEmpty {
+            argv.append(contentsOf: ["-A", userAgent])
+        }
+
+        let outputTarget = options.outputDocument ?? defaultOutputFilename(for: rawURL)
+        if outputTarget != "-" {
+            argv.append(contentsOf: ["-o", outputTarget])
+        }
+
+        argv.append(rawURL)
+
+        let subcommand = await context.runSubcommandIsolated(argv, stdin: Data())
+        context.currentDirectory = subcommand.currentDirectory
+        context.environment = subcommand.environment
+        context.stdout.append(subcommand.result.stdout)
+        context.stderr.append(subcommand.result.stderr)
+        return subcommand.result.exitCode
+    }
+
+    private static let shortOptionsRequiringAttachedValue: Set<Character> = [
+        "O",
+    ]
+
+    private static func normalizeAttachedValueOptions(_ args: [String]) -> [String] {
+        var output: [String] = []
+        var passthrough = false
+
+        for arg in args {
+            if passthrough {
+                output.append(arg)
+                continue
+            }
+
+            if arg == "--" {
+                passthrough = true
+                output.append(arg)
+                continue
+            }
+
+            guard arg.hasPrefix("-"), !arg.hasPrefix("--"), arg.count > 2 else {
+                output.append(arg)
+                continue
+            }
+
+            let optionCharacter = arg[arg.index(after: arg.startIndex)]
+            guard shortOptionsRequiringAttachedValue.contains(optionCharacter) else {
+                output.append(arg)
+                continue
+            }
+
+            let valueStart = arg.index(arg.startIndex, offsetBy: 2)
+            let value = String(arg[valueStart...])
+            guard !value.isEmpty else {
+                output.append(arg)
+                continue
+            }
+
+            output.append("-\(optionCharacter)")
+            output.append(value)
+        }
+
+        return output
+    }
+
+    private static func defaultOutputFilename(for rawURL: String) -> String {
+        let normalized: String
+        if rawURL.hasPrefix("data:") || rawURL.hasPrefix("file:") || rawURL.contains("://") {
+            normalized = rawURL
+        } else {
+            normalized = "https://\(rawURL)"
+        }
+
+        guard let url = URL(string: normalized) else {
+            return "index.html"
+        }
+
+        let path = url.path
+        if path.isEmpty || path.hasSuffix("/") {
+            return "index.html"
+        }
+
+        let basename = PathUtils.basename(path)
+        if basename.isEmpty || basename == "/" {
+            return "index.html"
+        }
+
+        let decoded = basename.removingPercentEncoding ?? basename
+        return decoded.isEmpty ? "index.html" : decoded
+    }
+}
