@@ -107,6 +107,7 @@ print(py.stdoutString) // hi
 
 `BashPython` embeds CPython directly (no JavaScriptCore/Pyodide path). The current prebuilt CPython runtime is available on macOS.
 On other Apple platforms, including iOS/iPadOS, Mac Catalyst, tvOS, and watchOS, the module still compiles but runtime execution returns an unavailable error.
+Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple-runtime.md`](/Users/zac/Projects/collab/Bash.swift/docs/cpython-apple-runtime.md).
 
 Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
 Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
