@@ -1,0 +1,13 @@
+version: 0.1.0
+name: language-deep
+description: |
+  Shell-language-focused eval profile for Bash.swift.
+  Designed as a fix-it queue for command substitution, loop/function semantics,
+  redirection and job-control edges, and near-term control-flow gaps.
+
+task_bank: tasks.yaml
+
+run_limits:
+  max_steps: 30
+  max_wall_time_seconds: 240
+  max_command_output_bytes: 262144

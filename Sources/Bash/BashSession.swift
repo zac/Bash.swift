@@ -53,7 +53,6 @@ public final actor BashSession {
             return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
         }
         var executableLine = substitution.commandLine
-
         let functionOutcome = parseAndRegisterFunctionDefinitions(in: executableLine)
         if let error = functionOutcome.error {
             substitution.stderr.append(Data("\(error)\n".utf8))
@@ -81,71 +80,34 @@ public final actor BashSession {
             return forResult
         }
 
-        do {
-            let parsed = try ShellParser.parse(executableLine)
-            let filesystem = filesystemStore
-            let startDirectory = currentDirectoryStore
-            let startEnvironment = environmentStore
-            let history = historyStore
-            let registry = commandRegistry
-            let shellFunctions = shellFunctionStore
-            let enableGlobbing = options.enableGlobbing
-            let secretPolicy = options.secretPolicy
-            let secretResolver = options.secretResolver
-            let secretOutputRedactor = options.secretOutputRedactor
-            let secretTracker = secretPolicy == .off ? nil : SecretExposureTracker()
-
-            let execution = await ShellExecutor.execute(
-                parsedLine: parsed,
-                stdin: stdin,
-                filesystem: filesystem,
-                currentDirectory: startDirectory,
-                environment: startEnvironment,
-                history: history,
-                commandRegistry: registry,
-                shellFunctions: shellFunctions,
-                enableGlobbing: enableGlobbing,
-                jobControl: jobManager,
-                secretPolicy: secretPolicy,
-                secretResolver: secretResolver,
-                secretTracker: secretTracker,
-                secretOutputRedactor: secretOutputRedactor
-            )
-
-            var result = execution.result
-            if let secretTracker {
-                let replacements = await secretTracker.snapshot()
-                if !replacements.isEmpty {
-                    result.stdout = secretOutputRedactor.redact(
-                        data: result.stdout,
-                        replacements: replacements
-                    )
-                    result.stderr = secretOutputRedactor.redact(
-                        data: result.stderr,
-                        replacements: replacements
-                    )
-                }
-            }
-
-            if !substitution.stderr.isEmpty {
-                var merged = substitution.stderr
-                merged.append(result.stderr)
-                result.stderr = merged
-            }
-
-            currentDirectoryStore = execution.currentDirectory
-            environmentStore = execution.environment
-            environmentStore["PWD"] = currentDirectoryStore
-            return result
-        } catch {
-            var stderr = substitution.stderr
-            stderr.append(Data("\(error)\n".utf8))
-            return CommandResult(
-                stdout: Data(),
-                stderr: stderr,
-                exitCode: 2
-            )
+        if let ifResult = await executeSimpleIfBlockIfPresent(
+            commandLine: executableLine,
+            stdin: stdin,
+            prefixedStderr: substitution.stderr
+        ) {
+            return ifResult
         }
+
+        if let whileResult = await executeSimpleWhileLoopIfPresent(
+            commandLine: executableLine,
+            stdin: stdin,
+            prefixedStderr: substitution.stderr
+        ) {
+            return whileResult
+        }
+
+        var result = await executeStandardCommandLine(
+            executableLine,
+            stdin: stdin
+        )
+
+        if !substitution.stderr.isEmpty {
+            var merged = substitution.stderr
+            merged.append(result.stderr)
+            result.stderr = merged
+        }
+
+        return result
     }
 
     public func register(_ command: any BuiltinCommand.Type) async {
@@ -268,13 +230,51 @@ public final actor BashSession {
         var variableName: String
         var values: [String]
         var body: String
-        var trailingRedirections: [Redirection]
+        var trailingAction: TrailingAction
     }
 
     private enum SimpleForLoopParseResult {
         case notForLoop
         case success(SimpleForLoop)
         case failure(ShellError)
+    }
+
+    private struct SimpleIfBlock {
+        var condition: String
+        var thenBody: String
+        var elseBody: String?
+        var trailingAction: TrailingAction
+    }
+
+    private enum SimpleIfBlockParseResult {
+        case notIfBlock
+        case success(SimpleIfBlock)
+        case failure(ShellError)
+    }
+
+    private struct SimpleWhileLoop {
+        var leadingCommands: String?
+        var condition: String
+        var body: String
+        var trailingAction: TrailingAction
+    }
+
+    private enum SimpleWhileLoopParseResult {
+        case notWhileLoop
+        case success(SimpleWhileLoop)
+        case failure(ShellError)
+    }
+
+    private enum TrailingAction {
+        case none
+        case redirections([Redirection])
+        case pipeline(String)
+    }
+
+    private struct DelimitedKeywordMatch {
+        var separatorIndex: String.Index
+        var keywordIndex: String.Index
+        var afterKeywordIndex: String.Index
     }
 
     private func executeParsedLine(
@@ -324,6 +324,33 @@ public final actor BashSession {
         return execution
     }
 
+    private func executeStandardCommandLine(
+        _ commandLine: String,
+        stdin: Data
+    ) async -> CommandResult {
+        do {
+            let parsed = try ShellParser.parse(commandLine)
+            let execution = await executeParsedLine(
+                parsedLine: parsed,
+                stdin: stdin,
+                currentDirectory: currentDirectoryStore,
+                environment: environmentStore,
+                shellFunctions: shellFunctionStore,
+                jobControl: jobManager
+            )
+            currentDirectoryStore = execution.currentDirectory
+            environmentStore = execution.environment
+            environmentStore["PWD"] = currentDirectoryStore
+            return execution.result
+        } catch {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(error)\n".utf8),
+                exitCode: 2
+            )
+        }
+    }
+
     private func expandCommandSubstitutions(in commandLine: String) async -> CommandSubstitutionOutcome {
         var output = ""
         var stderr = Data()
@@ -362,6 +389,12 @@ public final actor BashSession {
             if quote != .single, character == "$" {
                 let next = commandLine.index(after: index)
                 if next < commandLine.endIndex, commandLine[next] == "(" {
+                    let secondOpen = commandLine.index(after: next)
+                    if secondOpen < commandLine.endIndex, commandLine[secondOpen] == "(" {
+                        output.append(character)
+                        index = commandLine.index(after: index)
+                        continue
+                    }
                     do {
                         let capture = try Self.captureCommandSubstitution(in: commandLine, from: index)
                         let evaluated = await evaluateCommandSubstitution(capture.content)
@@ -514,13 +547,8 @@ public final actor BashSession {
                 stderr: combinedErr,
                 exitCode: lastExitCode
             )
-            await applyRedirections(loop.trailingRedirections, to: &result)
-
-            if !prefixedStderr.isEmpty {
-                var merged = prefixedStderr
-                merged.append(result.stderr)
-                result.stderr = merged
-            }
+            await applyTrailingAction(loop.trailingAction, to: &result)
+            mergePrefixedStderr(prefixedStderr, into: &result)
 
             return result
         }
@@ -549,41 +577,42 @@ public final actor BashSession {
         }
 
         Self.skipWhitespace(in: commandLine, index: &index)
-        guard let valuesMarker = Self.findSemicolonKeyword(
+        guard let valuesMarker = Self.findDelimitedKeyword(
             "do",
             in: commandLine,
             from: index
         ) else {
-            return .failure(.parserError("for: expected '; do'"))
+            return .failure(.parserError("for: expected 'do'"))
         }
 
-        let rawValues = String(commandLine[index..<valuesMarker.semicolonIndex])
+        let rawValues = String(commandLine[index..<valuesMarker.separatorIndex])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let values: [String]
-        do {
-            values = try Self.parseLoopValues(
-                rawValues,
-                environment: environmentStore
-            )
-        } catch let shellError as ShellError {
-            return .failure(shellError)
-        } catch {
-            return .failure(.parserError("\(error)"))
-        }
-        if values.isEmpty {
-            return .failure(.parserError("for: expected one or more values"))
+        if rawValues.isEmpty {
+            values = []
+        } else {
+            do {
+                values = try Self.parseLoopValues(
+                    rawValues,
+                    environment: environmentStore
+                )
+            } catch let shellError as ShellError {
+                return .failure(shellError)
+            } catch {
+                return .failure(.parserError("\(error)"))
+            }
         }
 
         let bodyStart = valuesMarker.afterKeywordIndex
-        guard let bodyMarker = Self.findSemicolonKeyword(
+        guard let bodyMarker = Self.findDelimitedKeyword(
             "done",
             in: commandLine,
             from: bodyStart
         ) else {
-            return .failure(.parserError("for: expected '; done'"))
+            return .failure(.parserError("for: expected 'done'"))
         }
 
-        let body = String(commandLine[bodyStart..<bodyMarker.semicolonIndex])
+        let body = String(commandLine[bodyStart..<bodyMarker.separatorIndex])
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if body.isEmpty {
             return .failure(.parserError("for: expected non-empty loop body"))
@@ -591,11 +620,10 @@ public final actor BashSession {
 
         let tail = String(commandLine[bodyMarker.afterKeywordIndex...])
             .trimmingCharacters(in: .whitespacesAndNewlines)
-        let redirectionsResult = Self.parseRedirections(from: tail)
-        let redirections: [Redirection]
-        switch redirectionsResult {
-        case let .success(value):
-            redirections = value
+        let trailingAction: TrailingAction
+        switch Self.parseTrailingAction(from: tail, context: "for") {
+        case let .success(action):
+            trailingAction = action
         case let .failure(error):
             return .failure(error)
         }
@@ -605,9 +633,554 @@ public final actor BashSession {
                 variableName: variableName,
                 values: values,
                 body: body,
-                trailingRedirections: redirections
+                trailingAction: trailingAction
             )
         )
+    }
+
+    private func executeSimpleIfBlockIfPresent(
+        commandLine: String,
+        stdin: Data,
+        prefixedStderr: Data
+    ) async -> CommandResult? {
+        let parsedIf = parseSimpleIfBlock(commandLine)
+        switch parsedIf {
+        case .notIfBlock:
+            return nil
+        case let .failure(error):
+            var stderr = prefixedStderr
+            stderr.append(Data("\(error)\n".utf8))
+            return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
+        case let .success(ifBlock):
+            let conditionResult = await executeConditionalExpression(
+                ifBlock.condition,
+                stdin: stdin
+            )
+
+            var combinedOut = conditionResult.stdout
+            var combinedErr = conditionResult.stderr
+            var lastExitCode: Int32 = conditionResult.exitCode
+
+            let selectedBody: String?
+            if conditionResult.exitCode == 0 {
+                selectedBody = ifBlock.thenBody
+            } else {
+                selectedBody = ifBlock.elseBody
+            }
+
+            if let selectedBody, !selectedBody.isEmpty {
+                let bodyResult = await executeStandardCommandLine(
+                    selectedBody,
+                    stdin: stdin
+                )
+                combinedOut.append(bodyResult.stdout)
+                combinedErr.append(bodyResult.stderr)
+                lastExitCode = bodyResult.exitCode
+            } else if conditionResult.exitCode != 0 {
+                lastExitCode = 0
+            }
+
+            var result = CommandResult(
+                stdout: combinedOut,
+                stderr: combinedErr,
+                exitCode: lastExitCode
+            )
+            await applyTrailingAction(ifBlock.trailingAction, to: &result)
+            mergePrefixedStderr(prefixedStderr, into: &result)
+            return result
+        }
+    }
+
+    private func parseSimpleIfBlock(_ commandLine: String) -> SimpleIfBlockParseResult {
+        var index = commandLine.startIndex
+        Self.skipWhitespace(in: commandLine, index: &index)
+
+        guard Self.consumeKeyword("if", in: commandLine, index: &index) else {
+            return .notIfBlock
+        }
+
+        Self.skipWhitespace(in: commandLine, index: &index)
+        guard let thenMarker = Self.findDelimitedKeyword(
+            "then",
+            in: commandLine,
+            from: index
+        ) else {
+            return .failure(.parserError("if: expected 'then'"))
+        }
+
+        let condition = String(commandLine[index..<thenMarker.separatorIndex])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if condition.isEmpty {
+            return .failure(.parserError("if: expected condition command"))
+        }
+
+        let bodyStart = thenMarker.afterKeywordIndex
+        guard let fiMarker = Self.findDelimitedKeyword(
+            "fi",
+            in: commandLine,
+            from: bodyStart
+        ) else {
+            return .failure(.parserError("if: expected 'fi'"))
+        }
+
+        let elseMarker = Self.findDelimitedKeyword(
+            "else",
+            in: commandLine,
+            from: bodyStart,
+            end: fiMarker.separatorIndex
+        )
+
+        let thenBody: String
+        let elseBody: String?
+        if let elseMarker {
+            thenBody = String(commandLine[bodyStart..<elseMarker.separatorIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            elseBody = String(commandLine[elseMarker.afterKeywordIndex..<fiMarker.separatorIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        } else {
+            thenBody = String(commandLine[bodyStart..<fiMarker.separatorIndex])
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            elseBody = nil
+        }
+
+        let tail = String(commandLine[fiMarker.afterKeywordIndex...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trailingAction: TrailingAction
+        switch Self.parseTrailingAction(from: tail, context: "if") {
+        case let .success(action):
+            trailingAction = action
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return .success(
+            SimpleIfBlock(
+                condition: condition,
+                thenBody: thenBody,
+                elseBody: elseBody,
+                trailingAction: trailingAction
+            )
+        )
+    }
+
+    private func executeSimpleWhileLoopIfPresent(
+        commandLine: String,
+        stdin: Data,
+        prefixedStderr: Data
+    ) async -> CommandResult? {
+        let parsedWhile = parseSimpleWhileLoop(commandLine)
+        switch parsedWhile {
+        case .notWhileLoop:
+            return nil
+        case let .failure(error):
+            var stderr = prefixedStderr
+            stderr.append(Data("\(error)\n".utf8))
+            return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
+        case let .success(loop):
+            let parsedBody: ParsedLine
+            do {
+                parsedBody = try ShellParser.parse(loop.body)
+            } catch {
+                var stderr = prefixedStderr
+                stderr.append(Data("\(error)\n".utf8))
+                return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
+            }
+
+            var combinedOut = Data()
+            var combinedErr = Data()
+            var lastExitCode: Int32 = 0
+            var didRunBody = false
+
+            if let leadingCommands = loop.leadingCommands,
+               !leadingCommands.isEmpty {
+                let leadingResult = await executeStandardCommandLine(
+                    leadingCommands,
+                    stdin: stdin
+                )
+                combinedOut.append(leadingResult.stdout)
+                combinedErr.append(leadingResult.stderr)
+                lastExitCode = leadingResult.exitCode
+            }
+
+            var iterations = 0
+            while true {
+                iterations += 1
+                if iterations > 10_000 {
+                    combinedErr.append(Data("while: exceeded max iterations\n".utf8))
+                    lastExitCode = 2
+                    break
+                }
+
+                let conditionResult = await executeConditionalExpression(
+                    loop.condition,
+                    stdin: stdin
+                )
+                combinedOut.append(conditionResult.stdout)
+                combinedErr.append(conditionResult.stderr)
+
+                if conditionResult.exitCode != 0 {
+                    if conditionResult.exitCode > 1, !didRunBody {
+                        lastExitCode = conditionResult.exitCode
+                    } else if !didRunBody {
+                        lastExitCode = 0
+                    }
+                    break
+                }
+
+                let bodyExecution = await executeParsedLine(
+                    parsedLine: parsedBody,
+                    stdin: stdin,
+                    currentDirectory: currentDirectoryStore,
+                    environment: environmentStore,
+                    shellFunctions: shellFunctionStore,
+                    jobControl: jobManager
+                )
+                currentDirectoryStore = bodyExecution.currentDirectory
+                environmentStore = bodyExecution.environment
+                environmentStore["PWD"] = currentDirectoryStore
+
+                combinedOut.append(bodyExecution.result.stdout)
+                combinedErr.append(bodyExecution.result.stderr)
+                lastExitCode = bodyExecution.result.exitCode
+                didRunBody = true
+            }
+
+            var result = CommandResult(
+                stdout: combinedOut,
+                stderr: combinedErr,
+                exitCode: lastExitCode
+            )
+            await applyTrailingAction(loop.trailingAction, to: &result)
+            mergePrefixedStderr(prefixedStderr, into: &result)
+            return result
+        }
+    }
+
+    private func parseSimpleWhileLoop(_ commandLine: String) -> SimpleWhileLoopParseResult {
+        var start = commandLine.startIndex
+        Self.skipWhitespace(in: commandLine, index: &start)
+
+        if commandLine[start...].hasPrefix("while") {
+            return parseWhileClause(
+                String(commandLine[start...]),
+                leadingCommands: nil
+            )
+        }
+
+        guard let whileMarker = Self.findDelimitedKeyword(
+            "while",
+            in: commandLine,
+            from: start
+        ) else {
+            return .notWhileLoop
+        }
+
+        let prefix = String(commandLine[start..<whileMarker.separatorIndex])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if prefix.isEmpty {
+            return .notWhileLoop
+        }
+
+        return parseWhileClause(
+            String(commandLine[whileMarker.keywordIndex...]),
+            leadingCommands: prefix
+        )
+    }
+
+    private func parseWhileClause(
+        _ whileClause: String,
+        leadingCommands: String?
+    ) -> SimpleWhileLoopParseResult {
+        var index = whileClause.startIndex
+        Self.skipWhitespace(in: whileClause, index: &index)
+        guard Self.consumeKeyword("while", in: whileClause, index: &index) else {
+            return .notWhileLoop
+        }
+
+        Self.skipWhitespace(in: whileClause, index: &index)
+        guard let doMarker = Self.findDelimitedKeyword(
+            "do",
+            in: whileClause,
+            from: index
+        ) else {
+            return .failure(.parserError("while: expected 'do'"))
+        }
+
+        let condition = String(whileClause[index..<doMarker.separatorIndex])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if condition.isEmpty {
+            return .failure(.parserError("while: expected condition command"))
+        }
+
+        let bodyStart = doMarker.afterKeywordIndex
+        guard let doneMarker = Self.findDelimitedKeyword(
+            "done",
+            in: whileClause,
+            from: bodyStart
+        ) else {
+            return .failure(.parserError("while: expected 'done'"))
+        }
+
+        let body = String(whileClause[bodyStart..<doneMarker.separatorIndex])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if body.isEmpty {
+            return .failure(.parserError("while: expected non-empty loop body"))
+        }
+
+        let tail = String(whileClause[doneMarker.afterKeywordIndex...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let trailingAction: TrailingAction
+        switch Self.parseTrailingAction(from: tail, context: "while") {
+        case let .success(action):
+            trailingAction = action
+        case let .failure(error):
+            return .failure(error)
+        }
+
+        return .success(
+            SimpleWhileLoop(
+                leadingCommands: leadingCommands,
+                condition: condition,
+                body: body,
+                trailingAction: trailingAction
+            )
+        )
+    }
+
+    private func executeConditionalExpression(
+        _ condition: String,
+        stdin: Data
+    ) async -> CommandResult {
+        if let testResult = await evaluateTestConditionIfPresent(condition) {
+            return testResult
+        }
+        return await executeStandardCommandLine(condition, stdin: stdin)
+    }
+
+    private func evaluateTestConditionIfPresent(_ condition: String) async -> CommandResult? {
+        let tokens: [LexToken]
+        do {
+            tokens = try ShellLexer.tokenize(condition)
+        } catch {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(error)\n".utf8),
+                exitCode: 2
+            )
+        }
+
+        var words: [String] = []
+        for token in tokens {
+            guard case let .word(word) = token else {
+                return nil
+            }
+            words.append(Self.expandWord(word, environment: environmentStore))
+        }
+
+        guard let first = words.first else {
+            return nil
+        }
+
+        var expression = words
+        if first == "test" {
+            expression.removeFirst()
+        } else if first == "[" {
+            guard expression.last == "]" else {
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("test: missing ']'\n".utf8),
+                    exitCode: 2
+                )
+            }
+            expression.removeFirst()
+            expression.removeLast()
+        } else {
+            return nil
+        }
+
+        return await evaluateTestExpression(expression)
+    }
+
+    private func evaluateTestExpression(_ expression: [String]) async -> CommandResult {
+        if expression.isEmpty {
+            return CommandResult(stdout: Data(), stderr: Data(), exitCode: 1)
+        }
+
+        if expression.count == 1 {
+            let isTrue = !expression[0].isEmpty
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data(),
+                exitCode: isTrue ? 0 : 1
+            )
+        }
+
+        if expression.count == 2 {
+            let op = expression[0]
+            let value = expression[1]
+
+            switch op {
+            case "-n":
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: value.isEmpty ? 1 : 0
+                )
+            case "-z":
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: value.isEmpty ? 0 : 1
+                )
+            case "-e", "-f", "-d":
+                let path = PathUtils.normalize(
+                    path: value,
+                    currentDirectory: currentDirectoryStore
+                )
+                guard await filesystemStore.exists(path: path) else {
+                    return CommandResult(stdout: Data(), stderr: Data(), exitCode: 1)
+                }
+
+                guard let info = try? await filesystemStore.stat(path: path) else {
+                    return CommandResult(stdout: Data(), stderr: Data(), exitCode: 1)
+                }
+
+                let passed: Bool
+                switch op {
+                case "-e":
+                    passed = true
+                case "-f":
+                    passed = !info.isDirectory
+                case "-d":
+                    passed = info.isDirectory
+                default:
+                    passed = false
+                }
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: passed ? 0 : 1
+                )
+            default:
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("test: unsupported expression\n".utf8),
+                    exitCode: 2
+                )
+            }
+        }
+
+        if expression.count == 3 {
+            let lhs = expression[0]
+            let op = expression[1]
+            let rhs = expression[2]
+
+            switch op {
+            case "=", "==":
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: lhs == rhs ? 0 : 1
+                )
+            case "!=":
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: lhs != rhs ? 0 : 1
+                )
+            case "-eq", "-ne", "-lt", "-le", "-gt", "-ge":
+                guard let leftValue = Int(lhs), let rightValue = Int(rhs) else {
+                    return CommandResult(
+                        stdout: Data(),
+                        stderr: Data("test: integer expression expected\n".utf8),
+                        exitCode: 2
+                    )
+                }
+                let passed: Bool
+                switch op {
+                case "-eq":
+                    passed = leftValue == rightValue
+                case "-ne":
+                    passed = leftValue != rightValue
+                case "-lt":
+                    passed = leftValue < rightValue
+                case "-le":
+                    passed = leftValue <= rightValue
+                case "-gt":
+                    passed = leftValue > rightValue
+                case "-ge":
+                    passed = leftValue >= rightValue
+                default:
+                    passed = false
+                }
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data(),
+                    exitCode: passed ? 0 : 1
+                )
+            default:
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("test: unsupported expression\n".utf8),
+                    exitCode: 2
+                )
+            }
+        }
+
+        return CommandResult(
+            stdout: Data(),
+            stderr: Data("test: unsupported expression\n".utf8),
+            exitCode: 2
+        )
+    }
+
+    private func applyTrailingAction(
+        _ action: TrailingAction,
+        to result: inout CommandResult
+    ) async {
+        switch action {
+        case .none:
+            return
+        case let .redirections(redirections):
+            await applyRedirections(redirections, to: &result)
+        case let .pipeline(pipeline):
+            do {
+                let parsed = try ShellParser.parse(pipeline)
+                let pipelineExecution = await executeParsedLine(
+                    parsedLine: parsed,
+                    stdin: result.stdout,
+                    currentDirectory: currentDirectoryStore,
+                    environment: environmentStore,
+                    shellFunctions: shellFunctionStore,
+                    jobControl: jobManager
+                )
+                currentDirectoryStore = pipelineExecution.currentDirectory
+                environmentStore = pipelineExecution.environment
+                environmentStore["PWD"] = currentDirectoryStore
+
+                var mergedStderr = result.stderr
+                mergedStderr.append(pipelineExecution.result.stderr)
+                result = CommandResult(
+                    stdout: pipelineExecution.result.stdout,
+                    stderr: mergedStderr,
+                    exitCode: pipelineExecution.result.exitCode
+                )
+            } catch {
+                result.stdout.removeAll(keepingCapacity: true)
+                result.stderr.append(Data("\(error)\n".utf8))
+                result.exitCode = 2
+            }
+        }
+    }
+
+    private func mergePrefixedStderr(_ prefixedStderr: Data, into result: inout CommandResult) {
+        guard !prefixedStderr.isEmpty else {
+            return
+        }
+
+        var merged = prefixedStderr
+        merged.append(result.stderr)
+        result.stderr = merged
     }
 
     private func applyRedirections(
@@ -903,20 +1476,22 @@ public final actor BashSession {
         throw ShellError.parserError("unterminated function body")
     }
 
-    private static func findSemicolonKeyword(
+    private static func findDelimitedKeyword(
         _ keyword: String,
         in commandLine: String,
-        from startIndex: String.Index
-    ) -> (semicolonIndex: String.Index, afterKeywordIndex: String.Index)? {
+        from startIndex: String.Index,
+        end: String.Index? = nil
+    ) -> DelimitedKeywordMatch? {
         var quote: QuoteKind = .none
         var index = startIndex
+        let endIndex = end ?? commandLine.endIndex
 
-        while index < commandLine.endIndex {
+        while index < endIndex {
             let character = commandLine[index]
 
             if character == "\\", quote != .single {
                 let next = commandLine.index(after: index)
-                if next < commandLine.endIndex {
+                if next < endIndex {
                     index = commandLine.index(after: next)
                 } else {
                     index = next
@@ -936,10 +1511,12 @@ public final actor BashSession {
                 continue
             }
 
-            if quote == .none, character == ";" {
+            if quote == .none, character == ";" || character == "\n" {
                 var cursor = commandLine.index(after: index)
-                Self.skipWhitespace(in: commandLine, index: &cursor)
-                guard cursor < commandLine.endIndex else {
+                while cursor < endIndex, commandLine[cursor].isWhitespace {
+                    cursor = commandLine.index(after: cursor)
+                }
+                guard cursor < endIndex else {
                     return nil
                 }
 
@@ -958,7 +1535,11 @@ public final actor BashSession {
                     continue
                 }
 
-                return (semicolonIndex: index, afterKeywordIndex: afterKeyword)
+                return DelimitedKeywordMatch(
+                    separatorIndex: index,
+                    keywordIndex: cursor,
+                    afterKeywordIndex: afterKeyword
+                )
             }
 
             index = commandLine.index(after: index)
@@ -982,8 +1563,35 @@ public final actor BashSession {
         return values
     }
 
+    private static func parseTrailingAction(
+        from trailing: String,
+        context: String
+    ) -> Result<TrailingAction, ShellError> {
+        let trimmed = trailing.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return .success(.none)
+        }
+
+        if trimmed.hasPrefix("|") {
+            let tail = String(trimmed.dropFirst())
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !tail.isEmpty else {
+                return .failure(.parserError("\(context): expected command after '|'"))
+            }
+            return .success(.pipeline(tail))
+        }
+
+        switch parseRedirections(from: trimmed, context: context) {
+        case let .success(redirections):
+            return .success(.redirections(redirections))
+        case let .failure(error):
+            return .failure(error)
+        }
+    }
+
     private static func parseRedirections(
-        from trailing: String
+        from trailing: String,
+        context: String
     ) -> Result<[Redirection], ShellError> {
         let trimmed = trailing.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -1000,7 +1608,7 @@ public final actor BashSession {
                   segment.pipeline[0].words.count == 1,
                   segment.pipeline[0].words[0].rawValue == "true" else {
                 return .failure(
-                    .parserError("for: unsupported trailing syntax")
+                    .parserError("\(context): unsupported trailing syntax")
                 )
             }
             return .success(segment.pipeline[0].redirections)

@@ -1,0 +1,117 @@
+{
+  "language.subst.simple_pwd": [
+    "echo $(pwd) > cwd.txt"
+  ],
+  "language.subst.nested_basename": [
+    "echo $(basename $(pwd)) > base.txt"
+  ],
+  "language.subst.quoted_concat": [
+    "echo \"pre-$(printf middle)-post\" > out.txt"
+  ],
+  "language.subst.trim_trailing_newline": [
+    "printf '%s' \"$(printf 'value\\n')\" > trimmed.txt"
+  ],
+  "language.subst.dynamic_redirect_target": [
+    "echo hi > \"$(printf dynamic).txt\""
+  ],
+  "language.subst.suppress_stderr": [
+    "printf '%s' \"$(ls missing.txt 2>/dev/null)\" > captured.txt"
+  ],
+  "language.for.newline_form": [
+    "for i in 1 2 3\ndo\n  echo $i\ndone > nums.txt"
+  ],
+  "language.for.quoted_values": [
+    "for i in \"one two\" three; do echo \"$i\"; done > words.txt"
+  ],
+  "language.for.append_existing": [
+    "for i in 1 2 3; do echo $i; done >> seq.txt"
+  ],
+  "language.for.empty_list": [
+    "for i in; do echo $i; done > empty.txt"
+  ],
+  "language.for.values_from_subst": [
+    "for i in $(printf 'b a c'); do echo $i; done | sort > vals.txt"
+  ],
+  "language.func.inline_define_call": [
+    "greet(){ echo hi; }; greet > greet.txt"
+  ],
+  "language.func.persist_across_commands": [
+    "hello(){ echo hello; }",
+    "hello > hello.txt"
+  ],
+  "language.func.multiline_body": [
+    "pair(){ echo left; echo right; }; pair > pair.txt"
+  ],
+  "language.func.calls_function": [
+    "a(){ echo A; }; b(){ a; echo B; }; b > ab.txt"
+  ],
+  "language.func.pipeline_transform": [
+    "greet(){ echo hi; }; greet | tr '[:lower:]' '[:upper:]' > up.txt"
+  ],
+  "language.func.default_expansion": [
+    "show(){ echo ${X:-fallback}; }; show > default.txt"
+  ],
+  "language.func.positional_arg": [
+    "joiner(){ echo \"$1\"; }; joiner pass > arg.txt"
+  ],
+  "language.func.positional_all_args": [
+    "showall(){ echo \"$@\"; }; showall one \"two words\" three > allargs.txt"
+  ],
+  "language.func.positional_arg_count": [
+    "argc(){ echo \"$#\"; }; argc a b c > argc.txt"
+  ],
+  "language.if.basic_then_else": [
+    "if test -f flag.txt; then echo yes > result.txt; else echo no > result.txt; fi"
+  ],
+  "language.while.counter": [
+    "i=1; while [ $i -le 3 ]; do echo $i; i=$((i+1)); done > while.txt"
+  ],
+  "language.func.return_status_chain": [
+    "failer(){ false; }; failer || echo recovered > status.txt"
+  ],
+  "language.jobs.multi_background_wait": [
+    "sleep 0.1 & sleep 0.1 & wait; echo done > done.txt"
+  ],
+  "language.redir.stderr_into_pipe": [
+    "ls missing.txt 2>&1 | grep missing.txt > matches.txt"
+  ],
+  "language.redir.stderr_append": [
+    "ls missing.txt 2>> combo.txt"
+  ],
+  "language.pipe_and_chain_success": [
+    "printf 'a\\n' | grep a && echo ok > ok.txt"
+  ],
+  "language.if.elif_branch": [
+    "if false; then echo no > elif.txt; elif true; then echo elif-hit > elif.txt; else echo no > elif.txt; fi"
+  ],
+  "language.until.counter": [
+    "i=1; until [ $i -gt 3 ]; do echo $i; i=$((i+1)); done > until.txt"
+  ],
+  "language.case.pattern_branch": [
+    "name=notes.md; case $name in *.md) echo md > case.txt ;; *.txt) echo txt > case.txt ;; *) echo other > case.txt ;; esac"
+  ],
+  "language.for.c_style_counter": [
+    "for ((i=1; i<=3; i++)); do echo $i; done > cfor.txt"
+  ],
+  "language.func.keyword_form": [
+    "function greet { echo hi; }; greet > func_kw.txt"
+  ],
+  "language.func.local_scope_shadow": [
+    "x=outer; function show { local x=inner; echo $x; }; show > local_scope.txt; echo $x >> local_scope.txt"
+  ],
+  "language.arith.comparison_ops": [
+    "echo $((5 > 3)) > cmp.txt; echo $((2 == 3)) >> cmp.txt"
+  ],
+  "language.arith.logical_ops": [
+    "echo $((1 && 0)) > logical.txt; echo $((0 || 1)) >> logical.txt"
+  ],
+  "language.arith.bitwise_ops": [
+    "echo $((5 & 3)) > bitwise.txt; echo $((5 | 2)) >> bitwise.txt; echo $((5 ^ 1)) >> bitwise.txt"
+  ],
+  "language.arith.power_op": [
+    "echo $((2 ** 8)) > power.txt"
+  ],
+  "language.ln.hard_link_shared_content": [
+    "ln hard_src.txt hard_link.txt && echo two >> hard_src.txt"
+  ]
+}

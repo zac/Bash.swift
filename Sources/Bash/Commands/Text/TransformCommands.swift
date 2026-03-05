@@ -337,6 +337,18 @@ struct TrCommand: BuiltinCommand {
 
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
         let input = CommandIO.decodeString(context.stdin)
+
+        if let destination = options.destination {
+            if options.source == "[:lower:]" && destination == "[:upper:]" {
+                context.writeStdout(input.uppercased())
+                return 0
+            }
+            if options.source == "[:upper:]" && destination == "[:lower:]" {
+                context.writeStdout(input.lowercased())
+                return 0
+            }
+        }
+
         let inputCharacters = Array(input)
         let sourceCharacters = expandCharacterSet(options.source)
         let sourceSet = Set(sourceCharacters)
@@ -433,6 +445,15 @@ struct TrCommand: BuiltinCommand {
     }
 
     private static func expandCharacterSet(_ raw: String) -> [Character] {
+        if raw.hasPrefix("[:"), raw.hasSuffix(":]"), raw.count > 4 {
+            let start = raw.index(raw.startIndex, offsetBy: 2)
+            let end = raw.index(raw.endIndex, offsetBy: -2)
+            let className = String(raw[start..<end])
+            if let classCharacters = posixClassCharacters(named: className) {
+                return classCharacters
+            }
+        }
+
         let unescaped = decodeEscapes(raw)
         guard unescaped.count >= 3 else {
             return unescaped
@@ -441,6 +462,29 @@ struct TrCommand: BuiltinCommand {
         var output: [Character] = []
         var index = 0
         while index < unescaped.count {
+            var consumedPOSIXClass = false
+            if index + 3 < unescaped.count,
+               unescaped[index] == "[",
+               unescaped[index + 1] == ":" {
+                var cursor = index + 2
+                while cursor + 1 < unescaped.count {
+                    if unescaped[cursor] == ":", unescaped[cursor + 1] == "]" {
+                        let className = String(unescaped[(index + 2)..<cursor])
+                        if let classCharacters = posixClassCharacters(named: className) {
+                            output.append(contentsOf: classCharacters)
+                            index = cursor + 2
+                            consumedPOSIXClass = true
+                        }
+                        break
+                    }
+                    cursor += 1
+                }
+            }
+
+            if consumedPOSIXClass {
+                continue
+            }
+
             if index + 2 < unescaped.count, unescaped[index + 1] == "-",
                let expandedRange = expandRange(start: unescaped[index], end: unescaped[index + 2]) {
                 output.append(contentsOf: expandedRange)
@@ -452,6 +496,27 @@ struct TrCommand: BuiltinCommand {
             index += 1
         }
         return output
+    }
+
+    private static func posixClassCharacters(named className: String) -> [Character]? {
+        switch className.lowercased() {
+        case "lower":
+            return expandRange(start: "a", end: "z")
+        case "upper":
+            return expandRange(start: "A", end: "Z")
+        case "digit":
+            return expandRange(start: "0", end: "9")
+        case "alpha":
+            return (expandRange(start: "A", end: "Z") ?? []) + (expandRange(start: "a", end: "z") ?? [])
+        case "alnum":
+            return (expandRange(start: "A", end: "Z") ?? [])
+                + (expandRange(start: "a", end: "z") ?? [])
+                + (expandRange(start: "0", end: "9") ?? [])
+        case "space":
+            return [" ", "\t", "\n", "\r", "\u{0B}", "\u{0C}"]
+        default:
+            return nil
+        }
     }
 
     private static func decodeEscapes(_ raw: String) -> [Character] {

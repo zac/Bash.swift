@@ -1,0 +1,451 @@
+version: 0.1.0
+
+tasks:
+  - id: language.subst.simple_pwd
+    tier: language-deep
+    prompt: |
+      Use command substitution to write the current working directory into `cwd.txt`.
+    setup:
+      - rm -f cwd.txt
+    validate:
+      - test "$(cat cwd.txt)" = "$(pwd)"
+    tags: [command-substitution, pwd]
+
+  - id: language.subst.nested_basename
+    tier: language-deep
+    prompt: |
+      Use nested command substitution to write the basename of the current working directory to `base.txt`.
+    setup:
+      - rm -f base.txt
+    validate:
+      - test "$(cat base.txt)" = "$(basename "$(pwd)")"
+    tags: [command-substitution, nested]
+
+  - id: language.subst.quoted_concat
+    tier: language-deep
+    prompt: |
+      Write exactly `pre-middle-post` to `out.txt` using command substitution for the `middle` portion.
+    setup:
+      - rm -f out.txt
+    validate:
+      - test "$(cat out.txt)" = "pre-middle-post"
+    tags: [command-substitution, quoting]
+
+  - id: language.subst.trim_trailing_newline
+    tier: language-deep
+    prompt: |
+      Capture output from `printf 'value\n'` via command substitution into `trimmed.txt`.
+      Ensure the file content is exactly `value` with no trailing newline.
+    setup:
+      - rm -f trimmed.txt
+    validate:
+      - test "$(cat trimmed.txt)" = "value"
+      - test "$(wc -c < trimmed.txt | tr -d ' ')" = "5"
+    tags: [command-substitution, newline]
+
+  - id: language.subst.dynamic_redirect_target
+    tier: language-deep
+    prompt: |
+      Use command substitution to construct a redirection target so that `echo hi`
+      writes to a file named `dynamic.txt`.
+    setup:
+      - rm -f dynamic.txt
+    validate:
+      - test -f dynamic.txt
+      - test "$(cat dynamic.txt)" = "hi"
+    tags: [command-substitution, redirection]
+
+  - id: language.subst.suppress_stderr
+    tier: language-deep
+    prompt: |
+      Use command substitution around a failing `ls missing.txt` while suppressing stderr,
+      and write the captured output to `captured.txt`.
+    setup:
+      - rm -f captured.txt
+    validate:
+      - test -f captured.txt
+      - test "$(wc -c < captured.txt | tr -d ' ')" = "0"
+    tags: [command-substitution, stderr]
+
+  - id: language.for.newline_form
+    tier: language-deep
+    prompt: |
+      Use newline-style `for` loop syntax to create `nums.txt` with lines `1`, `2`, `3`.
+    setup:
+      - rm -f nums.txt
+    validate:
+      - test "$(sed -n '1p' nums.txt)" = "1"
+      - test "$(sed -n '2p' nums.txt)" = "2"
+      - test "$(sed -n '3p' nums.txt)" = "3"
+    tags: [for-loop, shell-language]
+
+  - id: language.for.quoted_values
+    tier: language-deep
+    prompt: |
+      Use a `for` loop with quoted and unquoted values so that `words.txt` contains two lines:
+      `one two` and `three`.
+    setup:
+      - rm -f words.txt
+    validate:
+      - test "$(sed -n '1p' words.txt)" = "one two"
+      - test "$(sed -n '2p' words.txt)" = "three"
+      - test "$(wc -l < words.txt | tr -d ' ')" = "2"
+    tags: [for-loop, quoting]
+
+  - id: language.for.append_existing
+    tier: language-deep
+    prompt: |
+      `seq.txt` starts with one line `start`.
+      Append lines `1`, `2`, `3` using a `for` loop and `>>`.
+    setup:
+      - rm -f seq.txt
+      - printf 'start\n' > seq.txt
+    validate:
+      - test "$(sed -n '1p' seq.txt)" = "start"
+      - test "$(sed -n '2p' seq.txt)" = "1"
+      - test "$(sed -n '3p' seq.txt)" = "2"
+      - test "$(sed -n '4p' seq.txt)" = "3"
+    tags: [for-loop, append]
+
+  - id: language.for.empty_list
+    tier: language-deep
+    prompt: |
+      Use a `for` loop with an empty list and redirect its output to `empty.txt`.
+      The file should exist and be empty.
+    setup:
+      - rm -f empty.txt
+    validate:
+      - test -f empty.txt
+      - test "$(wc -c < empty.txt | tr -d ' ')" = "0"
+    tags: [for-loop, edge-case]
+
+  - id: language.for.values_from_subst
+    tier: language-deep
+    prompt: |
+      Use `for i in $(...)` to iterate over `b a c`, output each item on its own line,
+      sort the result, and write to `vals.txt`.
+    setup:
+      - rm -f vals.txt
+    validate:
+      - test "$(sed -n '1p' vals.txt)" = "a"
+      - test "$(sed -n '2p' vals.txt)" = "b"
+      - test "$(sed -n '3p' vals.txt)" = "c"
+    tags: [for-loop, command-substitution]
+
+  - id: language.func.inline_define_call
+    tier: language-deep
+    prompt: |
+      Define a function `greet` inline that prints `hi`, call it, and save output to `greet.txt`.
+    setup:
+      - rm -f greet.txt
+    validate:
+      - test "$(cat greet.txt)" = "hi"
+    tags: [function, shell-language]
+
+  - id: language.func.persist_across_commands
+    tier: language-deep
+    prompt: |
+      Define function `hello` in one command, then call it in a later command,
+      writing output to `hello.txt`.
+    setup:
+      - rm -f hello.txt
+    validate:
+      - test "$(cat hello.txt)" = "hello"
+    tags: [function, session-state]
+
+  - id: language.func.multiline_body
+    tier: language-deep
+    prompt: |
+      Define a function `pair` that prints `left` and `right` on separate lines.
+      Call it and write output to `pair.txt`.
+    setup:
+      - rm -f pair.txt
+    validate:
+      - test "$(sed -n '1p' pair.txt)" = "left"
+      - test "$(sed -n '2p' pair.txt)" = "right"
+    tags: [function, multiline]
+
+  - id: language.func.calls_function
+    tier: language-deep
+    prompt: |
+      Define function `a` that prints `A` and function `b` that calls `a` then prints `B`.
+      Run `b` and write output to `ab.txt`.
+    setup:
+      - rm -f ab.txt
+    validate:
+      - test "$(sed -n '1p' ab.txt)" = "A"
+      - test "$(sed -n '2p' ab.txt)" = "B"
+    tags: [function, composition]
+
+  - id: language.func.pipeline_transform
+    tier: language-deep
+    prompt: |
+      Define function `greet` that prints `hi`.
+      Pipe its output through `tr` to uppercase and save as `up.txt`.
+    setup:
+      - rm -f up.txt
+    validate:
+      - test "$(cat up.txt)" = "HI"
+    tags: [function, pipeline]
+
+  - id: language.func.default_expansion
+    tier: language-deep
+    prompt: |
+      Define function `show` that prints `${X:-fallback}`.
+      Without exporting `X`, run it and save output to `default.txt`.
+    setup:
+      - rm -f default.txt
+      - unset X
+    validate:
+      - test "$(cat default.txt)" = "fallback"
+    tags: [function, variables]
+
+  - id: language.func.positional_arg
+    tier: language-deep
+    prompt: |
+      Define function `joiner` that prints its first positional argument.
+      Run `joiner pass` and write output to `arg.txt`.
+    setup:
+      - rm -f arg.txt
+    validate:
+      - test "$(cat arg.txt)" = "pass"
+    tags: [function, positional-params]
+
+  - id: language.func.positional_all_args
+    tier: language-deep
+    prompt: |
+      Define function `showall` that prints direct `$@`.
+      Run `showall one "two words" three` and write output to `allargs.txt`.
+      Expected output line is `one two words three`.
+    setup:
+      - rm -f allargs.txt
+    validate:
+      - test "$(cat allargs.txt)" = "one two words three"
+    tags: [function, positional-params, at-sign]
+
+  - id: language.func.positional_arg_count
+    tier: language-deep
+    prompt: |
+      Define function `argc` that prints direct `$#`.
+      Run `argc a b c` and write output to `argc.txt`.
+      Expected output line is `3`.
+    setup:
+      - rm -f argc.txt
+    validate:
+      - test "$(cat argc.txt)" = "3"
+    tags: [function, positional-params, arg-count]
+
+  - id: language.if.basic_then_else
+    tier: language-deep
+    prompt: |
+      Use an `if ... then ... else ... fi` block to write `yes` to `result.txt`
+      when `flag.txt` exists.
+    setup:
+      - rm -f flag.txt result.txt
+      - touch flag.txt
+    validate:
+      - test "$(cat result.txt)" = "yes"
+    tags: [if, control-flow]
+
+  - id: language.while.counter
+    tier: language-deep
+    prompt: |
+      Use a `while` loop to write lines `1`, `2`, `3` into `while.txt`.
+    setup:
+      - rm -f while.txt
+    validate:
+      - test "$(sed -n '1p' while.txt)" = "1"
+      - test "$(sed -n '2p' while.txt)" = "2"
+      - test "$(sed -n '3p' while.txt)" = "3"
+    tags: [while, control-flow]
+
+  - id: language.func.return_status_chain
+    tier: language-deep
+    prompt: |
+      Define function `failer` that runs `false`.
+      Use `failer || ...` so `status.txt` contains `recovered`.
+    setup:
+      - rm -f status.txt
+    validate:
+      - test "$(cat status.txt)" = "recovered"
+    tags: [function, exit-status, chains]
+
+  - id: language.jobs.multi_background_wait
+    tier: language-deep
+    prompt: |
+      Start two `sleep` commands in the background, wait for all jobs,
+      then write `done` to `done.txt`.
+    setup:
+      - rm -f done.txt
+    validate:
+      - test "$(cat done.txt)" = "done"
+    tags: [background, wait, jobs]
+
+  - id: language.redir.stderr_into_pipe
+    tier: language-deep
+    prompt: |
+      Route stderr from a failing `ls missing.txt` into a pipeline,
+      filter it with `grep`, and write to `matches.txt`.
+    setup:
+      - rm -f matches.txt
+    validate:
+      - test -s matches.txt
+      - grep -q 'missing.txt' matches.txt
+    tags: [redirection, pipeline, stderr]
+
+  - id: language.redir.stderr_append
+    tier: language-deep
+    prompt: |
+      `combo.txt` begins with `begin`.
+      Append stderr from `ls missing.txt` into the same file using `2>>`.
+    setup:
+      - rm -f combo.txt
+      - printf 'begin\n' > combo.txt
+    validate:
+      - test "$(sed -n '1p' combo.txt)" = "begin"
+      - grep -q 'missing.txt' combo.txt
+    tags: [redirection, stderr, append]
+
+  - id: language.pipe_and_chain_success
+    tier: language-deep
+    prompt: |
+      Use a pipeline and `&&` so `ok.txt` is written only when the pipeline succeeds.
+    setup:
+      - rm -f ok.txt
+    validate:
+      - test "$(cat ok.txt)" = "ok"
+    tags: [pipeline, chains]
+
+  - id: language.if.elif_branch
+    tier: language-deep
+    prompt: |
+      Use `if / elif / else / fi` so that `elif.txt` contains `elif-hit`.
+      The `if` condition should be false and the `elif` condition should be true.
+    setup:
+      - rm -f elif.txt
+    validate:
+      - test "$(cat elif.txt)" = "elif-hit"
+    tags: [if, elif, control-flow]
+
+  - id: language.until.counter
+    tier: language-deep
+    prompt: |
+      Use an `until` loop with arithmetic increment to write lines `1`, `2`, `3`
+      into `until.txt`.
+    setup:
+      - rm -f until.txt
+    validate:
+      - test "$(sed -n '1p' until.txt)" = "1"
+      - test "$(sed -n '2p' until.txt)" = "2"
+      - test "$(sed -n '3p' until.txt)" = "3"
+    tags: [until, control-flow, arithmetic]
+
+  - id: language.case.pattern_branch
+    tier: language-deep
+    prompt: |
+      Use a `case` statement with pattern matching on `notes.md`
+      so that `case.txt` contains `md`.
+    setup:
+      - rm -f case.txt
+    validate:
+      - test "$(cat case.txt)" = "md"
+    tags: [case, control-flow, patterns]
+
+  - id: language.for.c_style_counter
+    tier: language-deep
+    prompt: |
+      Use a C-style `for ((...))` loop to write lines `1`, `2`, `3`
+      into `cfor.txt`.
+    setup:
+      - rm -f cfor.txt
+    validate:
+      - test "$(sed -n '1p' cfor.txt)" = "1"
+      - test "$(sed -n '2p' cfor.txt)" = "2"
+      - test "$(sed -n '3p' cfor.txt)" = "3"
+    tags: [for-loop, c-style-for, arithmetic]
+
+  - id: language.func.keyword_form
+    tier: language-deep
+    prompt: |
+      Define a function with the `function name { ... }` form,
+      call it, and write `hi` to `func_kw.txt`.
+    setup:
+      - rm -f func_kw.txt
+    validate:
+      - test "$(cat func_kw.txt)" = "hi"
+    tags: [function, function-keyword]
+
+  - id: language.func.local_scope_shadow
+    tier: language-deep
+    prompt: |
+      Set `x=outer`, define a function that uses `local x=inner` and echoes it,
+      then echo `x` again after the function. Write both lines to `local_scope.txt`.
+      Expected lines are `inner` then `outer`.
+    setup:
+      - rm -f local_scope.txt
+    validate:
+      - test "$(sed -n '1p' local_scope.txt)" = "inner"
+      - test "$(sed -n '2p' local_scope.txt)" = "outer"
+    tags: [function, local, scope]
+
+  - id: language.arith.comparison_ops
+    tier: language-deep
+    prompt: |
+      Use arithmetic expansion comparison operators to write two lines to `cmp.txt`:
+      line 1 should be result of `5 > 3`, line 2 should be result of `2 == 3`.
+    setup:
+      - rm -f cmp.txt
+    validate:
+      - test "$(sed -n '1p' cmp.txt)" = "1"
+      - test "$(sed -n '2p' cmp.txt)" = "0"
+    tags: [arithmetic, comparison]
+
+  - id: language.arith.logical_ops
+    tier: language-deep
+    prompt: |
+      Use arithmetic expansion logical operators to write two lines to `logical.txt`:
+      line 1 should be result of `1 && 0`, line 2 should be result of `0 || 1`.
+    setup:
+      - rm -f logical.txt
+    validate:
+      - test "$(sed -n '1p' logical.txt)" = "0"
+      - test "$(sed -n '2p' logical.txt)" = "1"
+    tags: [arithmetic, logical]
+
+  - id: language.arith.bitwise_ops
+    tier: language-deep
+    prompt: |
+      Use arithmetic expansion bitwise operators to write three lines to `bitwise.txt`:
+      line 1 `5 & 3`, line 2 `5 | 2`, line 3 `5 ^ 1`.
+    setup:
+      - rm -f bitwise.txt
+    validate:
+      - test "$(sed -n '1p' bitwise.txt)" = "1"
+      - test "$(sed -n '2p' bitwise.txt)" = "7"
+      - test "$(sed -n '3p' bitwise.txt)" = "4"
+    tags: [arithmetic, bitwise]
+
+  - id: language.arith.power_op
+    tier: language-deep
+    prompt: |
+      Use arithmetic expansion power operator to write `2 ** 8` result into `power.txt`.
+    setup:
+      - rm -f power.txt
+    validate:
+      - test "$(cat power.txt)" = "256"
+    tags: [arithmetic, power]
+
+  - id: language.ln.hard_link_shared_content
+    tier: language-deep
+    prompt: |
+      `hard_src.txt` starts with one line `one`.
+      Use `ln hard_src.txt hard_link.txt` to create a hard link.
+      Append `two` to `hard_src.txt`. `hard_link.txt` should also show `two` on line 2.
+    setup:
+      - rm -f hard_src.txt hard_link.txt
+      - printf 'one\n' > hard_src.txt
+    validate:
+      - test -f hard_link.txt
+      - test "$(sed -n '1p' hard_link.txt)" = "one"
+      - test "$(sed -n '2p' hard_link.txt)" = "two"
+    tags: [links, hard-link, filesystem]

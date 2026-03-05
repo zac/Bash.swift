@@ -1,19 +1,26 @@
-# Eval Setup (Draft)
+# Eval Setup
 
-This directory defines a practical eval setup for Bash.swift using a single `general` profile.
+This directory defines practical eval profiles for Bash.swift.
 
 The intent is to answer two questions:
 1. How often does Bash.swift complete realistic NL shell tasks end-to-end?
 2. What gaps appear in the commands and shell language patterns that modern LLMs naturally use?
 
-## Profile Overview
+## Profiles
 
-- Profile: `general`
+### `general`
+
 - Environment: Debian GNU userland (containerized)
 - Task bank: deterministic file-system-centric tasks with shell validators
 - Tiers:
   - `core`: should become Bash.swift parity targets
   - `gap-probe`: informational tasks for discovering missing commands/language support
+
+### `language-deep`
+
+- Focused shell-language stress profile (command substitution, `for`, functions, redirection edges, and control-flow probes)
+- Task bank and matching command plans are checked in for direct regression runs
+- Best used as a fix-it queue while expanding parser/runtime behavior
 
 ## Why This Shape
 
@@ -72,6 +79,10 @@ For each task:
 - `docs/evals/general/profile.yaml`
 - `docs/evals/general/tasks.yaml`
 - `docs/evals/general/Dockerfile`
+- `docs/evals/language-deep/profile.yaml`
+- `docs/evals/language-deep/tasks.yaml`
+- `docs/evals/language-deep/commands.json`
+- `docs/evals/language-deep/README.md`
 
 ## BashEvalRunner CLI
 
@@ -96,6 +107,16 @@ swift run BashEvalRunner \
 
 The checked-in `docs/evals/examples/commands.json` now includes plans for all
 tasks in `docs/evals/general/tasks.yaml` (no expected skips from missing plans).
+
+Run `language-deep` with static plans:
+
+```bash
+swift run BashEvalRunner \
+  --profile docs/evals/language-deep/profile.yaml \
+  --engine bashswift \
+  --commands-file docs/evals/language-deep/commands.json \
+  --report /tmp/bash-language-deep-report.json
+```
 
 `commands.json` can be either:
 

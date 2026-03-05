@@ -15,8 +15,10 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 - [Platform Support](#platform-support)
 - [Quick Start](#quick-start)
 - [Public API](#public-api)
+- [How It Works](#how-it-works)
 - [Filesystem Model](#filesystem-model)
 - [Implemented Commands](#implemented-commands)
+- [Eval Runner and Profiles](#eval-runner-and-profiles)
 - [Testing](#testing)
 - [Roadmap](#roadmap)
 
@@ -244,16 +246,21 @@ Execution pipeline:
 - Redirections: `>`, `>>`, `<`, `2>`, `2>&1`
 - Command chaining: `&&`, `||`, `;`
 - Background execution: `&` with `jobs`, `fg`, `wait`
+- Command substitution: `$(...)` (including nested forms)
+- Simple `for` loops: `for name in values; do ...; done` (supports trailing redirections)
+- Simple control flow: `if ... then ... else ... fi`, `while ...; do ...; done`
+- Shell functions: `name(){ ...; }` definitions and invocation (persist across `run` calls)
 - Variables: `$VAR`, `${VAR}`, `${VAR:-default}`, `$!` (last background pseudo-PID)
 - Globs: `*`, `?`, `[abc]` (when `enableGlobbing` is true)
 - Command lookup by name and by path-like invocation (`/bin/ls`)
 
 ### Not Yet Supported (Shell Language)
 
-- Positional parameters (`$1`, `$@`, etc.)
-- `if/then/elif/else/fi`
-- `for/while/until`
-- Shell functions and `local`
+- Full positional-parameter semantics (`$0`, `$*`, quoted `$@` parity edge-cases)
+- `if/then/elif/else/fi` advanced forms (`elif`, nested branches parity)
+- `until`
+- Full `for` loop surface (`for ...; do` newline form, omitted `in` list, C-style `for ((...))`)
+- Function features like `local`, `return`, and `function name { ... }` syntax
 - Full POSIX job-control signals/states (`bg`, `disown`, signal forwarding)
 
 ## Filesystem Model
@@ -424,6 +431,7 @@ All implemented commands support `--help`.
 | Command | Supported Options |
 | --- | --- |
 | `curl` | URL argument; `-s`, `-S`, `-i`, `-I`, `-f`, `-L`, `-v`, `-X <method>`, `-H <header>...`, `-A <ua>`, `-e <referer>`, `-u <user:pass>`, `-b <cookie|@file|file>`, `-c <cookie-jar-file>`, `-d/--data <value>...`, `--data-raw <value>...`, `--data-binary <value>...`, `--data-urlencode <value>...`, `-T <file>`, `-F <name=value|name=@file>`, `-o <file>`, `-O`, `-w <format>`, `-m <seconds>`, `--connect-timeout <seconds>`, `--max-redirs <count>`; supports `data:`, `file:`, and HTTP(S) URLs (`file:` is scoped to the shell filesystem root) |
+| `wget` | URL argument; `--version`, `-q/--quiet`, `-O/--output-document <file>`, `--user-agent <ua>` |
 | `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
 
 When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
@@ -434,6 +442,53 @@ When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` r
 - Non-zero command exits are returned in `CommandResult.exitCode` (not thrown).
 - `BashSession.init` can throw; `run` always returns `CommandResult` (including parser/runtime failures with exit code `2`).
 - Pipelines are currently sequential and buffered (`stdout` from one command becomes `stdin` for the next command).
+
+## Eval Runner and Profiles
+
+`BashEvalRunner` executes NL shell tasks from YAML task banks and validates results with deterministic shell checks.
+Use it to compare Bash.swift against system bash and track parser/command parity over time.
+
+Primary eval docs live in `docs/evals/README.md`.
+
+Profiles:
+- `docs/evals/general/profile.yaml`: broad command and workflow cross-section with `core` and `gap-probe` tiers.
+- `docs/evals/language-deep/profile.yaml`: shell-language stress profile for command substitution, `for` loops, functions, redirection edges, and control-flow probes.
+
+Build runner:
+
+```bash
+swift build --target BashEvalRunner
+```
+
+Run `general` with static command plans:
+
+```bash
+swift run BashEvalRunner \
+  --profile docs/evals/general/profile.yaml \
+  --engine bashswift \
+  --commands-file docs/evals/examples/commands.json \
+  --report /tmp/bash-eval-report.json
+```
+
+Run `language-deep` with static command plans:
+
+```bash
+swift run BashEvalRunner \
+  --profile docs/evals/language-deep/profile.yaml \
+  --engine bashswift \
+  --commands-file docs/evals/language-deep/commands.json \
+  --report /tmp/bash-language-deep-report.json
+```
+
+Run with an external planner command:
+
+```bash
+swift run BashEvalRunner \
+  --profile docs/evals/general/profile.yaml \
+  --engine bashswift \
+  --agent-command './scripts/plan_commands.sh' \
+  --report /tmp/bash-eval-report.json
+```
 
 ## Testing
 

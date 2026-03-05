@@ -103,6 +103,55 @@ struct SessionIntegrationTests {
         #expect(file.stdoutString == "1\n2\n3\n")
     }
 
+    @Test("newline for loop syntax executes")
+    func newlineForLoopSyntaxExecutes() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let loop = await session.run(
+            """
+            for i in 1 2 3
+            do
+              echo $i
+            done > nums_newline.txt
+            """
+        )
+        #expect(loop.exitCode == 0)
+
+        let file = await session.run("cat nums_newline.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "1\n2\n3\n")
+    }
+
+    @Test("for loop with empty list still applies redirection")
+    func forLoopWithEmptyListStillAppliesRedirection() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let loop = await session.run("for i in; do echo $i; done > empty.txt")
+        #expect(loop.exitCode == 0)
+
+        let exists = await session.run("cat empty.txt")
+        #expect(exists.exitCode == 0)
+
+        let size = await session.run("wc -c < empty.txt")
+        #expect(size.exitCode == 0)
+        #expect(size.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines) == "0")
+    }
+
+    @Test("for loop output can feed trailing pipeline")
+    func forLoopOutputCanFeedTrailingPipeline() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let loop = await session.run("for i in b a c; do echo $i; done | sort > vals.txt")
+        #expect(loop.exitCode == 0)
+
+        let file = await session.run("cat vals.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "a\nb\nc\n")
+    }
+
     @Test("function definition can be invoked later in the same line")
     func functionDefinitionCanBeInvokedLaterInTheSameLine() async throws {
         let (session, root) = try await TestSupport.makeSession()
@@ -114,6 +163,46 @@ struct SessionIntegrationTests {
         let file = await session.run("cat greet.txt")
         #expect(file.exitCode == 0)
         #expect(file.stdoutString == "hi\n")
+    }
+
+    @Test("function positional argument expansion")
+    func functionPositionalArgumentExpansion() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("joiner(){ echo \"$1\"; }; joiner pass > arg.txt")
+        #expect(result.exitCode == 0)
+
+        let file = await session.run("cat arg.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "pass\n")
+    }
+
+    @Test("if then else blocks execute")
+    func ifThenElseBlocksExecute() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("touch flag.txt")
+        let result = await session.run("if test -f flag.txt; then echo yes > result.txt; else echo no > result.txt; fi")
+        #expect(result.exitCode == 0)
+
+        let file = await session.run("cat result.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "yes\n")
+    }
+
+    @Test("while loops with assignment and arithmetic expansion")
+    func whileLoopsWithAssignmentAndArithmeticExpansion() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("i=1; while [ $i -le 3 ]; do echo $i; i=$((i+1)); done > while.txt")
+        #expect(result.exitCode == 0)
+
+        let file = await session.run("cat while.txt")
+        #expect(file.exitCode == 0)
+        #expect(file.stdoutString == "1\n2\n3\n")
     }
 
     @Test("wget version output includes Wget marker")
@@ -387,6 +476,10 @@ struct SessionIntegrationTests {
         let trDelete = await session.run("printf 'aabbcc\\n' | tr -d b")
         #expect(trDelete.exitCode == 0)
         #expect(trDelete.stdoutString == "aacc\n")
+
+        let trPosixClasses = await session.run("printf 'hi\\n' | tr '[:lower:]' '[:upper:]'")
+        #expect(trPosixClasses.exitCode == 0)
+        #expect(trPosixClasses.stdoutString == "HI\n")
 
         let trSqueeze = await session.run("printf 'aaabbbcc\\n' | tr -s ab")
         #expect(trSqueeze.exitCode == 0)

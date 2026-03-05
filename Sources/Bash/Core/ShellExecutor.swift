@@ -241,7 +241,10 @@ enum ShellExecutor {
         let commandArgs = Array(expandedWords.dropFirst())
 
         var result: CommandResult
-        if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
+        if commandArgs.isEmpty, let assignment = parseAssignment(commandName) {
+            environment[assignment.name] = assignment.value
+            result = CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
+        } else if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
             var context = CommandContext(
                 commandName: commandName,
                 arguments: commandArgs,
@@ -270,6 +273,7 @@ enum ShellExecutor {
         } else if let functionBody = shellFunctions[commandName] {
             result = await executeShellFunction(
                 functionBody,
+                functionArguments: commandArgs,
                 stdin: input,
                 filesystem: filesystem,
                 currentDirectory: &currentDirectory,
@@ -394,6 +398,7 @@ enum ShellExecutor {
 
     private static func executeShellFunction(
         _ body: String,
+        functionArguments: [String],
         stdin: Data,
         filesystem: any ShellFilesystem,
         currentDirectory: inout String,
@@ -419,6 +424,9 @@ enum ShellExecutor {
             )
         }
 
+        let savedPositional = snapshotPositionalParameters(from: environment)
+        applyPositionalParameters(functionArguments, to: &environment)
+
         let execution = await execute(
             parsedLine: parsedBody,
             stdin: stdin,
@@ -437,7 +445,10 @@ enum ShellExecutor {
         )
 
         currentDirectory = execution.currentDirectory
-        environment = execution.environment
+        environment = restorePositionalParameters(
+            in: execution.environment,
+            snapshot: savedPositional
+        )
         return execution.result
     }
 
@@ -491,6 +502,64 @@ enum ShellExecutor {
         }
 
         return nil
+    }
+
+    private static func parseAssignment(_ word: String) -> (name: String, value: String)? {
+        guard let equals = word.firstIndex(of: "="), equals != word.startIndex else {
+            return nil
+        }
+
+        let name = String(word[..<equals])
+        guard isValidIdentifier(name) else {
+            return nil
+        }
+
+        let valueStart = word.index(after: equals)
+        let value = String(word[valueStart...])
+        return (name: name, value: value)
+    }
+
+    private static func isValidIdentifier(_ value: String) -> Bool {
+        guard let first = value.first, first == "_" || first.isLetter else {
+            return false
+        }
+        return value.dropFirst().allSatisfy { $0 == "_" || $0.isLetter || $0.isNumber }
+    }
+
+    private static func snapshotPositionalParameters(from environment: [String: String]) -> [String: String] {
+        environment.filter { isPositionalParameterKey($0.key) }
+    }
+
+    private static func applyPositionalParameters(_ args: [String], to environment: inout [String: String]) {
+        for key in Array(environment.keys) where isPositionalParameterKey(key) {
+            environment.removeValue(forKey: key)
+        }
+
+        environment["#"] = String(args.count)
+        environment["@"] = args.joined(separator: " ")
+        environment["*"] = args.joined(separator: " ")
+        for (offset, value) in args.enumerated() {
+            environment[String(offset + 1)] = value
+        }
+    }
+
+    private static func restorePositionalParameters(
+        in environment: [String: String],
+        snapshot: [String: String]
+    ) -> [String: String] {
+        var output = environment
+        for key in Array(output.keys) where isPositionalParameterKey(key) {
+            output.removeValue(forKey: key)
+        }
+        output.merge(snapshot) { _, rhs in rhs }
+        return output
+    }
+
+    private static func isPositionalParameterKey(_ key: String) -> Bool {
+        if key == "#" || key == "@" || key == "*" {
+            return true
+        }
+        return !key.isEmpty && key.allSatisfy(\.isNumber)
     }
 
     private static func redactCommandResult(
@@ -623,6 +692,23 @@ enum ShellExecutor {
                 continue
             }
 
+            if string[next] == "(" {
+                let maybeSecondOpen = string.index(after: next)
+                if maybeSecondOpen < string.endIndex, string[maybeSecondOpen] == "(",
+                   let capture = captureArithmeticExpansion(
+                       in: string,
+                       secondOpen: maybeSecondOpen
+                   ) {
+                    let evaluated = evaluateArithmeticExpression(
+                        capture.expression,
+                        environment: environment
+                    ) ?? 0
+                    result += String(evaluated)
+                    index = capture.endIndex
+                    continue
+                }
+            }
+
             if string[next] == "{" {
                 guard let close = string[next...].firstIndex(of: "}") else {
                     result.append("$")
@@ -661,6 +747,213 @@ enum ShellExecutor {
         }
 
         return result
+    }
+
+    private static func captureArithmeticExpansion(
+        in string: String,
+        secondOpen: String.Index
+    ) -> (expression: String, endIndex: String.Index)? {
+        var depth = 1
+        var cursor = string.index(after: secondOpen)
+        let expressionStart = cursor
+
+        while cursor < string.endIndex {
+            if string[cursor] == "(" {
+                let next = string.index(after: cursor)
+                if next < string.endIndex, string[next] == "(" {
+                    depth += 1
+                    cursor = string.index(after: next)
+                    continue
+                }
+            } else if string[cursor] == ")" {
+                let next = string.index(after: cursor)
+                if next < string.endIndex, string[next] == ")" {
+                    depth -= 1
+                    if depth == 0 {
+                        let expression = String(string[expressionStart..<cursor])
+                        return (
+                            expression: expression,
+                            endIndex: string.index(after: next)
+                        )
+                    }
+                    cursor = string.index(after: next)
+                    continue
+                }
+            }
+            cursor = string.index(after: cursor)
+        }
+        return nil
+    }
+
+    private static func evaluateArithmeticExpression(
+        _ raw: String,
+        environment: [String: String]
+    ) -> Int? {
+        enum Token {
+            case number(Int)
+            case op(Character)
+            case lparen
+            case rparen
+        }
+
+        func isIdentifierStart(_ character: Character) -> Bool {
+            character == "_" || character.isLetter
+        }
+
+        func isIdentifierBody(_ character: Character) -> Bool {
+            character == "_" || character.isLetter || character.isNumber
+        }
+
+        let chars = Array(raw)
+        var tokens: [Token] = []
+        var index = 0
+
+        while index < chars.count {
+            let char = chars[index]
+            if char.isWhitespace {
+                index += 1
+                continue
+            }
+
+            if char == "(" {
+                tokens.append(.lparen)
+                index += 1
+                continue
+            }
+
+            if char == ")" {
+                tokens.append(.rparen)
+                index += 1
+                continue
+            }
+
+            if "+-*/%".contains(char) {
+                tokens.append(.op(char))
+                index += 1
+                continue
+            }
+
+            if char.isNumber ||
+                (char == "-" && index + 1 < chars.count && chars[index + 1].isNumber) {
+                var value = String(char)
+                index += 1
+                while index < chars.count, chars[index].isNumber {
+                    value.append(chars[index])
+                    index += 1
+                }
+                guard let intValue = Int(value) else {
+                    return nil
+                }
+                tokens.append(.number(intValue))
+                continue
+            }
+
+            if isIdentifierStart(char) {
+                var name = String(char)
+                index += 1
+                while index < chars.count, isIdentifierBody(chars[index]) {
+                    name.append(chars[index])
+                    index += 1
+                }
+                let intValue = Int(environment[name] ?? "") ?? 0
+                tokens.append(.number(intValue))
+                continue
+            }
+
+            return nil
+        }
+
+        var cursor = 0
+
+        func parseExpression() -> Int? {
+            guard var value = parseTerm() else {
+                return nil
+            }
+
+            while cursor < tokens.count {
+                guard case let .op(op) = tokens[cursor], op == "+" || op == "-" else {
+                    break
+                }
+                cursor += 1
+                guard let rhs = parseTerm() else {
+                    return nil
+                }
+                value = op == "+" ? value + rhs : value - rhs
+            }
+            return value
+        }
+
+        func parseTerm() -> Int? {
+            guard var value = parseFactor() else {
+                return nil
+            }
+
+            while cursor < tokens.count {
+                guard case let .op(op) = tokens[cursor], op == "*" || op == "/" || op == "%" else {
+                    break
+                }
+                cursor += 1
+                guard let rhs = parseFactor() else {
+                    return nil
+                }
+
+                switch op {
+                case "*":
+                    value *= rhs
+                case "/":
+                    if rhs == 0 {
+                        return nil
+                    }
+                    value /= rhs
+                case "%":
+                    if rhs == 0 {
+                        return nil
+                    }
+                    value %= rhs
+                default:
+                    return nil
+                }
+            }
+            return value
+        }
+
+        func parseFactor() -> Int? {
+            guard cursor < tokens.count else {
+                return nil
+            }
+
+            switch tokens[cursor] {
+            case let .number(value):
+                cursor += 1
+                return value
+            case .lparen:
+                cursor += 1
+                guard let value = parseExpression() else {
+                    return nil
+                }
+                guard cursor < tokens.count, case .rparen = tokens[cursor] else {
+                    return nil
+                }
+                cursor += 1
+                return value
+            case .rparen:
+                return nil
+            case .op(let op):
+                if op == "-" {
+                    cursor += 1
+                    guard let value = parseFactor() else {
+                        return nil
+                    }
+                    return -value
+                }
+                return nil
+            }
+        }
+
+        guard let value = parseExpression(), cursor == tokens.count else {
+            return nil
+        }
+        return value
     }
 
     private static func redactForExternalOutput(
