@@ -67,10 +67,7 @@ let package = Package(
             name: "BashPython",
             dependencies: [
                 "Bash",
-                .target(
-                    name: "BashCPythonBridge",
-                    condition: .when(platforms: [.macOS, .iOS])
-                ),
+                "BashCPythonBridge",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
