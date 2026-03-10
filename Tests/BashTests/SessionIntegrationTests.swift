@@ -547,13 +547,37 @@ struct SessionIntegrationTests {
         #expect(headQuiet.exitCode == 0)
         #expect(headQuiet.stdoutString == "a\nd\n")
 
+        let headLegacyCount = await session.run("head -2 one.txt")
+        #expect(headLegacyCount.exitCode == 0)
+        #expect(headLegacyCount.stdoutString == "a\nb\n")
+
+        let headAttachedCount = await session.run("head -n2 one.txt")
+        #expect(headAttachedCount.exitCode == 0)
+        #expect(headAttachedCount.stdoutString == "a\nb\n")
+
         let headVerbose = await session.run("head -n 1 -v one.txt")
         #expect(headVerbose.exitCode == 0)
         #expect(headVerbose.stdoutString == "==> one.txt <==\na\n")
 
+        let tailLegacyCount = await session.run("tail -2 one.txt")
+        #expect(tailLegacyCount.exitCode == 0)
+        #expect(tailLegacyCount.stdoutString == "b\nc\n")
+
+        let tailLegacyFromLine = await session.run("tail +2 one.txt")
+        #expect(tailLegacyFromLine.exitCode == 0)
+        #expect(tailLegacyFromLine.stdoutString == "b\nc\n")
+
+        let tailAttachedFromLine = await session.run("tail -n+2 one.txt")
+        #expect(tailAttachedFromLine.exitCode == 0)
+        #expect(tailAttachedFromLine.stdoutString == "b\nc\n")
+
         let tailFromLine = await session.run("tail -n +2 one.txt")
         #expect(tailFromLine.exitCode == 0)
         #expect(tailFromLine.stdoutString == "b\nc\n")
+
+        let tailInvalidLegacyFromLine = await session.run("tail +0 one.txt")
+        #expect(tailInvalidLegacyFromLine.exitCode == 1)
+        #expect(tailInvalidLegacyFromLine.stderrString == "tail: invalid number of lines: +0\n")
 
         let wcChars = await session.run("printf 'é\\n' | wc -m")
         #expect(wcChars.exitCode == 0)

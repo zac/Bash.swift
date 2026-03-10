@@ -22,6 +22,12 @@ struct HeadCommand: BuiltinCommand {
     static let name = "head"
     static let overview = "Output the first part of files"
 
+    static func _toAnyBuiltinCommand() -> AnyBuiltinCommand {
+        makeNormalizedLineCommand(Self.self) { args in
+            normalizeLineCommandArguments(args, command: .head)
+        }
+    }
+
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
         guard options.n >= 0 else {
             context.writeStderr("head: line count must be >= 0\n")
@@ -95,6 +101,12 @@ struct TailCommand: BuiltinCommand {
 
     static let name = "tail"
     static let overview = "Output the last part of files"
+
+    static func _toAnyBuiltinCommand() -> AnyBuiltinCommand {
+        makeNormalizedLineCommand(Self.self) { args in
+            normalizeLineCommandArguments(args, command: .tail)
+        }
+    }
 
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
         guard let lineMode = parseLineMode(options.n) else {
@@ -251,4 +263,135 @@ private func shouldShowHeader(totalFiles: Int, quiet: Bool, verbose: Bool) -> Bo
     }
 
     return verbose || totalFiles > 1
+}
+
+private enum LegacyLineCountCommand {
+    case head
+    case tail
+}
+
+private func makeNormalizedLineCommand<C: BuiltinCommand>(
+    _ command: C.Type,
+    normalize: @escaping ([String]) -> [String]
+) -> AnyBuiltinCommand {
+    AnyBuiltinCommand(
+        name: command.name,
+        aliases: command.aliases,
+        overview: command.overview
+    ) { context, args in
+        do {
+            let options = try C.Options.parse(normalize(args))
+            return await C.run(context: &context, options: options)
+        } catch {
+            let message = C.Options.fullMessage(for: error)
+            if !message.isEmpty {
+                let output = message.hasSuffix("\n") ? message : message + "\n"
+                let exitCode = C.Options.exitCode(for: error).rawValue
+                if exitCode == 0 {
+                    context.writeStdout(output)
+                } else {
+                    context.writeStderr(output)
+                }
+            }
+            return C.Options.exitCode(for: error).rawValue
+        }
+    }
+}
+
+private func normalizeLineCommandArguments(
+    _ args: [String],
+    command: LegacyLineCountCommand
+) -> [String] {
+    var normalized: [String] = []
+    var passthrough = false
+    var expectsValue = false
+
+    for arg in args {
+        if passthrough {
+            normalized.append(arg)
+            continue
+        }
+
+        if arg == "--" {
+            passthrough = true
+            normalized.append(arg)
+            continue
+        }
+
+        if expectsValue {
+            normalized.append(arg)
+            expectsValue = false
+            continue
+        }
+
+        if let value = normalizeAttachedValueOption(arg, option: "n") {
+            normalized.append(contentsOf: ["-n", value])
+            continue
+        }
+
+        if let value = normalizeAttachedValueOption(arg, option: "c") {
+            normalized.append(contentsOf: ["-c", value])
+            continue
+        }
+
+        if let value = normalizeLegacyBareLineCount(arg, command: command) {
+            normalized.append(contentsOf: ["-n", value])
+            continue
+        }
+
+        normalized.append(arg)
+        expectsValue = arg == "-n" || arg == "--n" || arg == "-c" || arg == "--c"
+    }
+
+    return normalized
+}
+
+private func normalizeAttachedValueOption(
+    _ arg: String,
+    option: Character
+) -> String? {
+    guard arg.hasPrefix("-"), !arg.hasPrefix("--"), arg.count > 2 else {
+        return nil
+    }
+
+    let optionIndex = arg.index(after: arg.startIndex)
+    guard arg[optionIndex] == option else {
+        return nil
+    }
+
+    let valueStart = arg.index(after: optionIndex)
+    let value = String(arg[valueStart...])
+    return value.isEmpty ? nil : value
+}
+
+private func normalizeLegacyBareLineCount(
+    _ arg: String,
+    command: LegacyLineCountCommand
+) -> String? {
+    switch command {
+    case .head:
+        guard arg.hasPrefix("-"), arg.count > 1 else {
+            return nil
+        }
+
+        let value = String(arg.dropFirst())
+        return isASCIIIntegerToken(value) ? value : nil
+
+    case .tail:
+        if arg.hasPrefix("+"), arg.count > 1 {
+            let value = String(arg.dropFirst())
+            return isASCIIIntegerToken(value) ? arg : nil
+        }
+
+        guard arg.hasPrefix("-"), arg.count > 1 else {
+            return nil
+        }
+
+        let value = String(arg.dropFirst())
+        return isASCIIIntegerToken(value) ? value : nil
+    }
+}
+
+private func isASCIIIntegerToken(_ value: String) -> Bool {
+    !value.isEmpty && value.allSatisfy { $0 >= "0" && $0 <= "9" }
 }

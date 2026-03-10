@@ -2,6 +2,8 @@
 
 `Bash.swift` provides an in-process, stateful, emulated shell for Swift apps. It's heavily inspired by [just-bash](https://github.com/vercel-labs/just-bash).
 
+Repository: [github.com/velos/Bash.swift](https://github.com/velos/Bash.swift)
+
 You create a `BashSession`, run shell command strings, and get structured `stdout` / `stderr` / `exitCode` results. Commands mutate a real directory on disk through a sandboxed, root-jail filesystem abstraction.
 
 ## Development Process
@@ -37,7 +39,7 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 ```swift
 // Package.swift
 .dependencies: [
-    .package(url: "https://github.com/zac/Bash.swift.git", from: "0.1.0")
+    .package(url: "https://github.com/velos/Bash.swift.git", from: "0.1.0")
 ],
 .targets: [
     .target(
@@ -53,7 +55,7 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit", "BashSecrets"]
 ```
 
-`BashPython` uses a remote `CPython.xcframework` binary target hosted in this repo's GitHub Releases, so consumers do not
+`BashPython` uses a remote `CPython.xcframework` binary target hosted in the repo's GitHub Releases, so consumers do not
 need Git LFS and the prebuilt CPython framework is not checked into the repository.
 
 If you include optional products, remember to register their commands at runtime (`registerSQLite3`, `registerPython`, `registerGit`, `registerSecrets`).
@@ -107,7 +109,7 @@ print(py.stdoutString) // hi
 
 `BashPython` embeds CPython directly (no JavaScriptCore/Pyodide path). The current prebuilt CPython runtime is available on macOS.
 On other Apple platforms, including iOS/iPadOS, Mac Catalyst, tvOS, and watchOS, the module still compiles but runtime execution returns an unavailable error.
-Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple-runtime.md`](/Users/zac/Projects/collab/Bash.swift/docs/cpython-apple-runtime.md).
+Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple-runtime.md`](docs/cpython-apple-runtime.md).
 
 Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
 Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
