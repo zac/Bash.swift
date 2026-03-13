@@ -5,7 +5,10 @@
 
 #include <TargetConditionals.h>
 
-#if (TARGET_OS_OSX || TARGET_OS_IOS) && __has_include(<Python.h>)
+#if (TARGET_OS_OSX || TARGET_OS_IOS) && __has_include(<Python/Python.h>)
+#define BASHSWIFT_CPYTHON_AVAILABLE 1
+#include <Python/Python.h>
+#elif (TARGET_OS_OSX || TARGET_OS_IOS) && __has_include(<Python.h>)
 #define BASHSWIFT_CPYTHON_AVAILABLE 1
 #include <Python.h>
 #else

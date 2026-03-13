@@ -1,0 +1,47 @@
+name: Publish CPython Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      beeware_tag:
+        description: "BeeWare Python-Apple-support tag, for example 3.13-b13"
+        required: true
+        default: "3.13-b13"
+      release_tag:
+        description: "GitHub release tag to create/update. Defaults to cpython-<beeware_tag> when empty."
+        required: false
+        default: ""
+      include_catalyst:
+        description: "Build and include a Mac Catalyst slice"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Publish CPython release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          BEEWARE_TAG: ${{ inputs.beeware_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ -z "$RELEASE_TAG" ]]; then
+            export RELEASE_TAG="cpython-${BEEWARE_TAG}"
+          fi
+
+          if [[ "${{ inputs.include_catalyst }}" == "true" ]]; then
+            export BUILD_CATALYST=1
+          fi
+
+          scripts/publish_cpython_release_asset.sh

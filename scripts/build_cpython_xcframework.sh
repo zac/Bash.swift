@@ -28,6 +28,8 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build-cpython-apple-support}"
 BEEWARE_TAG="${BEEWARE_TAG:-3.13-b13}"
 REQUIRE_CATALYST="${REQUIRE_CATALYST:-0}"
 CATALYST_FRAMEWORK_PATH="${CPYTHON_CATALYST_FRAMEWORK_PATH:-}"
+BUILD_CATALYST="${BUILD_CATALYST:-0}"
+CATALYST_BUILD_SCRIPT="$ROOT_DIR/scripts/build_cpython_catalyst_framework.sh"
 
 PYTHON_SERIES="${BEEWARE_TAG%%-*}"
 BEEWARE_BUILD="${BEEWARE_TAG#*-}"
@@ -82,6 +84,20 @@ if [[ -n "$CATALYST_FRAMEWORK_PATH" ]]; then
     echo "error: CPYTHON_CATALYST_FRAMEWORK_PATH does not exist: ${CATALYST_FRAMEWORK_PATH}" >&2
     exit 1
   fi
+elif [[ "$BUILD_CATALYST" == "1" ]]; then
+  if [[ ! -x "$CATALYST_BUILD_SCRIPT" ]]; then
+    echo "error: missing Mac Catalyst build script: ${CATALYST_BUILD_SCRIPT}" >&2
+    exit 1
+  fi
+  CATALYST_FRAMEWORK_PATH="$BUILD_DIR/catalyst/Python.framework"
+  echo "Building Mac Catalyst Python.framework from source"
+  BEEWARE_TAG="$BEEWARE_TAG" \
+    BUILD_DIR="$BUILD_DIR/catalyst" \
+    CPYTHON_CATALYST_OUTPUT_PATH="$CATALYST_FRAMEWORK_PATH" \
+    "$CATALYST_BUILD_SCRIPT"
+fi
+
+if [[ -n "$CATALYST_FRAMEWORK_PATH" ]]; then
   FRAMEWORK_ARGS+=(-framework "$CATALYST_FRAMEWORK_PATH")
 elif [[ "$REQUIRE_CATALYST" == "1" ]]; then
   echo "error: REQUIRE_CATALYST=1 but CPYTHON_CATALYST_FRAMEWORK_PATH is not set" >&2
@@ -110,7 +126,7 @@ Created:
 
 Notes:
   - The merged artifact contains Python.framework slices sourced from BeeWare's support packages.
-  - To include Mac Catalyst, provide CPYTHON_CATALYST_FRAMEWORK_PATH=/abs/path/to/Python.framework
-    and re-run this script.
+  - To include Mac Catalyst, either set BUILD_CATALYST=1 or provide
+    CPYTHON_CATALYST_FRAMEWORK_PATH=/abs/path/to/Python.framework and re-run this script.
   - Enabling iOS/Mac Catalyst runtime support in Bash.swift still requires follow-up packaging work.
 EOF

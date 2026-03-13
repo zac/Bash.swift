@@ -21,9 +21,9 @@ Relevant upstream references:
 - `https://github.com/beeware/Python-Apple-support`
 - `https://github.com/beeware/Python-Apple-support/blob/main/README.md`
 
-## Maintainer Script
+## Build Script
 
-Use [build_cpython_xcframework.sh](/Users/zac/Projects/collab/Bash.swift/scripts/build_cpython_xcframework.sh)
+Use [build_cpython_xcframework.sh](../scripts/build_cpython_xcframework.sh)
 to assemble a release asset from BeeWare's published support packages:
 
 ```bash
@@ -38,13 +38,61 @@ By default the script:
 - packages `build/cpython/CPython.xcframework.zip`
 - prints the SwiftPM checksum
 
-The script also accepts an optional custom Catalyst framework:
+To auto-build and include a Mac Catalyst framework slice in the same pass:
+
+```bash
+BUILD_CATALYST=1 \
+scripts/build_cpython_xcframework.sh
+```
+
+This repo also includes a dedicated helper,
+[build_cpython_catalyst_framework.sh](../scripts/build_cpython_catalyst_framework.sh),
+which builds a fat `arm64` + `x86_64` `Python.framework` for
+`*-apple-ios-macabi` from official CPython sources plus BeeWare's published
+`macabi` dependency archives. The builder defaults to a Mac Catalyst
+deployment target of `13.1`, which is the first Xcode-accepted `macabi`
+triple:
+
+```bash
+scripts/build_cpython_catalyst_framework.sh
+```
+
+If you already have a Catalyst framework, the XCFramework build still accepts a
+manual path override:
 
 ```bash
 CPYTHON_CATALYST_FRAMEWORK_PATH=/abs/path/to/Python.framework \
 REQUIRE_CATALYST=1 \
 scripts/build_cpython_xcframework.sh
 ```
+
+## Publish Step
+
+Use [publish_cpython_release_asset.sh](../scripts/publish_cpython_release_asset.sh)
+to build the SwiftPM artifact and upload it to a GitHub release:
+
+```bash
+GH_REPO=velos/Bash.swift \
+RELEASE_TAG=cpython-3.13-b13 \
+BEEWARE_TAG=3.13-b13 \
+BUILD_CATALYST=1 \
+scripts/publish_cpython_release_asset.sh
+```
+
+The publish script:
+
+- runs `build_cpython_xcframework.sh`
+- writes `CPython.xcframework.checksum.txt` and `CPython.artifact-metadata.json`
+- creates the target GitHub release tag if it does not already exist
+- uploads `CPython.xcframework.zip` plus checksum/metadata assets
+- prints the exact `Package.swift` `binaryTarget` snippet to use
+
+The script expects GitHub CLI auth via `GH_TOKEN`/`GITHUB_TOKEN`.
+
+For maintainers who prefer a manual UI entry point, this repo also includes
+[`publish-cpython-artifact.yml`](../.github/workflows/publish-cpython-artifact.yml),
+which exposes a `workflow_dispatch` action with `beeware_tag`, optional
+`release_tag`, and an `include_catalyst` toggle.
 
 ## Important Constraints
 
@@ -65,10 +113,9 @@ until the app-bundle packaging story is implemented as well.
 
 To actually turn on runtime support beyond macOS, the package still needs:
 
-1. A published release asset that includes the desired platform slices.
-2. `BashCPythonBridge` linker settings updated for the framework name inside the
-   new artifact.
-3. `Package.swift` platform conditions widened so `CPython` is linked on iOS
-   and Mac Catalyst when those slices exist.
-4. A resource/install story for mobile and Catalyst builds so the Python
+1. A packaging decision for SwiftPM linkage beyond macOS. SwiftPM can gate on
+   `.iOS`, but not specifically on Mac Catalyst, so widening the manifest would
+   also pull CPython into plain iOS builds before the runtime bundle story is
+   ready.
+2. A resource/install story for mobile and Catalyst builds so the Python
    standard library is available at runtime.

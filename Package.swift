@@ -44,8 +44,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "CPython",
-            url: "https://github.com/zac/Bash.swift/releases/download/0.3.1/CPython.xcframework.zip",
-            checksum: "7be0ac87a289fffce6a560b282304da261a21384c2869cec6c60651e6b30b4c7"
+            url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13/CPython.xcframework.zip",
+            checksum: "5afb0b07be17ec17b3fa075fcd87294f567c7de1e1df08926239f61277c2d8db"
         ),
         .target(
             name: "Bash",
@@ -81,7 +81,7 @@ let package = Package(
             ],
             publicHeadersPath: "include",
             linkerSettings: [
-                .linkedFramework("Python3", .when(platforms: [.macOS])),
+                .linkedFramework("Python", .when(platforms: [.macOS])),
             ]
         ),
         .target(
