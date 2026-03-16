@@ -18,6 +18,7 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 - [Quick Start](#quick-start)
 - [Public API](#public-api)
 - [How It Works](#how-it-works)
+- [Security](#security)
 - [Filesystem Model](#filesystem-model)
 - [Implemented Commands](#implemented-commands)
 - [Eval Runner and Profiles](#eval-runner-and-profiles)
@@ -126,6 +127,7 @@ Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple
 
 Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
 Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
+`SessionOptions.networkPolicy` and `permissionHandler` also apply to Python socket connections, so host apps can enforce the same outbound rules across shell commands and embedded Python.
 `pip` and arbitrary native extension loading are non-goals in this runtime profile.
 
 Optional `git` registration:
@@ -251,6 +253,20 @@ public enum PermissionDecision {
 }
 ```
 
+### `NetworkPolicy`
+
+```swift
+public struct NetworkPolicy {
+    public static let unrestricted: NetworkPolicy
+
+    public var allowedHosts: [String]
+    public var allowedURLPrefixes: [String]
+    public var denyPrivateRanges: Bool
+}
+```
+
+Use `allowedHosts` for host-based allowlists that should also apply to `git` remotes and Python socket connections. Use `allowedURLPrefixes` for URL-aware tools like `curl`/`wget`. When both are empty, the built-in policy is unrestricted.
+
 ### `SessionOptions`
 
 ```swift
@@ -260,6 +276,7 @@ public struct SessionOptions {
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
+    public var networkPolicy: NetworkPolicy
     public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
@@ -273,21 +290,27 @@ Defaults:
 - `initialEnvironment`: `[:]`
 - `enableGlobbing`: `true`
 - `maxHistory`: `1000`
+- `networkPolicy`: `NetworkPolicy.unrestricted`
 - `permissionHandler`: `nil`
 - `secretPolicy`: `.off`
 - `secretResolver`: `nil`
 - `secretOutputRedactor`: `DefaultSecretOutputRedactor()`
 
-Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
+Use `networkPolicy` for built-in outbound rules such as private-range blocking and allowlists. Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions after the built-in policy passes. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
 
-Example HTTP(S) permission gate:
+Example built-in policy plus callback:
 
 ```swift
 let options = SessionOptions(
+    networkPolicy: NetworkPolicy(
+        allowedHosts: ["api.example.com"],
+        allowedURLPrefixes: ["https://api.example.com/v1/"],
+        denyPrivateRanges: true
+    ),
     permissionHandler: { request in
         switch request.kind {
         case let .network(network):
-            if network.url.hasPrefix("https://api.example.com/") {
+            if network.url.hasPrefix("https://api.example.com/v1/") {
                 return .allowForSession
             }
             return .deny(message: "network access denied")
@@ -317,6 +340,18 @@ Execution pipeline:
 5. `CommandResult` is returned.
 
 `run(_:options:)` follows the same pipeline, but starts from temporary environment / cwd overrides and restores the session shell state afterward.
+
+## Security
+
+`Bash.swift` is a practical execution environment, not a hardened security sandbox. The project is designed to keep command execution in-process, jail filesystem access to the configured root, and give the embedding app explicit control over sensitive surfaces such as secrets and outbound network access. That said, it should be treated as defense-in-depth for app and agent workflows, not as a guarantee that hostile code is safely contained.
+
+Current hardening layers include:
+- Root-jail filesystem implementations plus null-byte path rejection.
+- Optional `NetworkPolicy` rules (`denyPrivateRanges`, host allowlists, URL-prefix allowlists) and the host `permissionHandler`.
+- Strict `BashPython` shims that block process/FFI escape APIs like `subprocess`, `ctypes`, and `os.system`.
+- Secret-reference resolution/redaction policies that keep opaque references in model-visible flows by default.
+
+Security-sensitive embeddings should still assume the host app owns the real trust boundary. If you need durable user consent, domain reputation checks, persistent policy memory, stricter runtime isolation, or stronger resource limits, keep those controls in the host and use `BashSession` as one layer rather than the whole boundary.
 
 ### Supported Shell Features
 
@@ -515,7 +550,8 @@ All implemented commands support `--help`.
 | `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
 
 When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
-When `SessionOptions.permissionHandler` is set, `curl` and `wget` ask it before outbound HTTP(S) requests. `data:` and jailed `file:` URLs do not trigger the callback.
+When `SessionOptions.networkPolicy` is set, `curl`/`wget`, `git clone` remotes, and `BashPython` socket connections enforce the same built-in allowlist/private-range rules.
+When `SessionOptions.permissionHandler` is set, `curl` and `wget` ask it before outbound HTTP(S) requests, `git clone` asks it before remote clones, and `BashPython` asks it before socket connections. `data:` and jailed `file:` URLs do not trigger network checks.
 
 ## Command Behaviors and Notes
 

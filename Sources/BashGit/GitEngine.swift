@@ -521,6 +521,15 @@ private enum GitEngineLibgit2 {
 
     private static func resolveCloneSource(repository: String, context: CommandContext) async throws -> CloneSource {
         if isRemoteRepository(repository) {
+            let remoteURL = normalizedRemoteRepositoryURL(repository)
+            let decision = await context.requestNetworkPermission(
+                url: remoteURL,
+                method: "CLONE"
+            )
+            if case let .deny(message) = decision {
+                throw GitEngineError.runtime(message ?? "network access denied: CLONE \(remoteURL)")
+            }
+
             return CloneSource(
                 sourceURL: repository,
                 projection: nil,
@@ -596,6 +605,21 @@ private enum GitEngineLibgit2 {
             return false
         }
         return repository[..<colonIndex].contains("@")
+    }
+
+    private static func normalizedRemoteRepositoryURL(_ repository: String) -> String {
+        if repository.contains("://") {
+            return repository
+        }
+
+        if let colonIndex = repository.firstIndex(of: ":"),
+           repository[..<colonIndex].contains("@") {
+            let authority = String(repository[..<colonIndex])
+            let path = String(repository[repository.index(after: colonIndex)...])
+            return "ssh://\(authority)/\(path)"
+        }
+
+        return repository
     }
 
     private static func parseCommitMessage(_ arguments: [String]) throws -> String {

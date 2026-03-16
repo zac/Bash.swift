@@ -114,6 +114,7 @@ public struct SessionOptions: Sendable {
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
+    public var networkPolicy: NetworkPolicy
     public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
@@ -125,6 +126,7 @@ public struct SessionOptions: Sendable {
         initialEnvironment: [String: String] = [:],
         enableGlobbing: Bool = true,
         maxHistory: Int = 1_000,
+        networkPolicy: NetworkPolicy = .unrestricted,
         permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil,
         secretPolicy: SecretHandlingPolicy = .off,
         secretResolver: (any SecretReferenceResolving)? = nil,
@@ -135,6 +137,7 @@ public struct SessionOptions: Sendable {
         self.initialEnvironment = initialEnvironment
         self.enableGlobbing = enableGlobbing
         self.maxHistory = maxHistory
+        self.networkPolicy = networkPolicy
         self.permissionHandler = permissionHandler
         self.secretPolicy = secretPolicy
         self.secretResolver = secretResolver

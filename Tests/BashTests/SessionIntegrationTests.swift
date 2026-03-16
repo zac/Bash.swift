@@ -1632,6 +1632,32 @@ struct SessionIntegrationTests {
         #expect(requests.isEmpty)
     }
 
+    @Test("curl network policy can deny private ranges")
+    func curlNetworkPolicyCanDenyPrivateRanges() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: NetworkPolicy(denyPrivateRanges: true)
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl http://127.0.0.1:1")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("private network host"))
+    }
+
+    @Test("curl network policy can deny urls outside allowlist")
+    func curlNetworkPolicyCanDenyURLsOutsideAllowlist() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: NetworkPolicy(
+                allowedURLPrefixes: ["https://api.example.com/"]
+            )
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl https://example.com")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("not in the network allowlist"))
+    }
+
     @Test("html-to-markdown command parity chunk")
     func htmlToMarkdownCommandParityChunk() async throws {
         let (session, root) = try await TestSupport.makeSession()

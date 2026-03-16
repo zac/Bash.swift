@@ -53,9 +53,30 @@ private let cpythonFilesystemCallback: @convention(c) (UnsafeMutableRawPointer?,
     return UnsafePointer(pointer)
 }
 
+private let cpythonNetworkCallback: @convention(c) (UnsafeMutableRawPointer?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>? = {
+    context, request in
+    guard let context,
+          let request
+    else {
+        guard let pointer = strdup("{\"ok\":false,\"error\":\"invalid network callback payload\"}") else {
+            return nil
+        }
+        return UnsafePointer(pointer)
+    }
+
+    let bridge = Unmanaged<CPythonNetworkBridge>.fromOpaque(context).takeUnretainedValue()
+    let requestJSON = String(cString: request)
+    let responseJSON = bridge.handle(requestJSON: requestJSON)
+    guard let pointer = strdup(responseJSON) else {
+        return nil
+    }
+    return UnsafePointer(pointer)
+}
+
 public actor CPythonRuntime: PythonRuntime {
     private let configuration: CPythonConfiguration
     private let filesystemBridge = CPythonFilesystemBridge()
+    private let networkBridge = CPythonNetworkBridge()
 
     private var runtime: OpaquePointer?
     private var initializationError: String?
@@ -108,8 +129,13 @@ public actor CPythonRuntime: PythonRuntime {
                 filesystem: filesystem,
                 currentDirectory: request.currentDirectory
             )
+            networkBridge.setContext(
+                commandName: request.commandName,
+                permissionAuthorizer: request.permissionAuthorizer
+            )
             defer {
                 filesystemBridge.clearContext()
+                networkBridge.clearContext()
             }
 
             let payload: [String: Any] = [
@@ -128,6 +154,8 @@ public actor CPythonRuntime: PythonRuntime {
 
             let bridgeContext = Unmanaged.passUnretained(filesystemBridge).toOpaque()
             bash_cpython_runtime_set_fs_handler(runtime, cpythonFilesystemCallback, bridgeContext)
+            let networkContext = Unmanaged.passUnretained(networkBridge).toOpaque()
+            bash_cpython_runtime_set_network_handler(runtime, cpythonNetworkCallback, networkContext)
 
             var errorPointer: UnsafeMutablePointer<CChar>?
             let resultPointer = payloadJSON.withCString { payloadCString in
@@ -481,6 +509,107 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
     }
 }
 
+private final class CPythonNetworkBridge: @unchecked Sendable {
+    private let lock = NSLock()
+    private var commandName = "python3"
+    private var permissionAuthorizer: (any PermissionAuthorizing)?
+
+    func setContext(
+        commandName: String,
+        permissionAuthorizer: (any PermissionAuthorizing)?
+    ) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.commandName = commandName
+        self.permissionAuthorizer = permissionAuthorizer
+    }
+
+    func clearContext() {
+        lock.lock()
+        defer { lock.unlock() }
+        commandName = "python3"
+        permissionAuthorizer = nil
+    }
+
+    func handle(requestJSON: String) -> String {
+        guard let data = requestJSON.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else {
+            return response(error: "invalid network bridge request")
+        }
+
+        guard let url = object["url"] as? String,
+              let method = object["method"] as? String
+        else {
+            return response(error: "network bridge request missing url or method")
+        }
+
+        let snapshot = snapshot()
+        guard let permissionAuthorizer = snapshot.permissionAuthorizer else {
+            return response(success: [:])
+        }
+
+        let request = PermissionRequest(
+            command: snapshot.commandName,
+            kind: .network(NetworkPermissionRequest(url: url, method: method))
+        )
+
+        do {
+            let decision = try runBlocking {
+                await permissionAuthorizer.authorize(request)
+            }
+            if case let .deny(message) = decision {
+                return response(error: message ?? "network access denied: \(method) \(url)")
+            }
+            return response(success: [:])
+        } catch {
+            return response(error: "\(error)")
+        }
+    }
+
+    private func snapshot() -> (commandName: String, permissionAuthorizer: (any PermissionAuthorizing)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (commandName, permissionAuthorizer)
+    }
+
+    private func runBlocking<T>(_ operation: @escaping @Sendable () async -> T) throws -> T {
+        let semaphore = DispatchSemaphore(value: 0)
+        let box = BlockingResultBox<T>()
+
+        Task.detached {
+            let value = await operation()
+            box.set(.success(value))
+            semaphore.signal()
+        }
+
+        semaphore.wait()
+        switch box.get() {
+        case let .success(value):
+            return value
+        case let .failure(error):
+            throw error
+        case .none:
+            throw CPythonRuntimeError.executionFailed("network permission check did not produce a result")
+        }
+    }
+
+    private func response(success: [String: Any]) -> String {
+        var payload: [String: Any] = ["ok": true]
+        payload.merge(success) { _, rhs in rhs }
+        return jsonString(payload)
+    }
+
+    private func response(error: String) -> String {
+        jsonString(["ok": false, "error": error])
+    }
+
+    private func jsonString(_ object: [String: Any]) -> String {
+        let data = (try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])) ?? Data("{}".utf8)
+        return String(decoding: data, as: UTF8.self)
+    }
+}
+
 private final class BlockingResultBox<T>: @unchecked Sendable {
     private let lock = NSLock()
     private var storage: Result<T, Error>?
@@ -509,6 +638,7 @@ import json
 import os
 import posixpath
 import runpy
+import socket
 import stat as _stat
 import sys
 import tempfile as _tempfile
@@ -516,6 +646,7 @@ import traceback
 import uuid
 
 from _bashswift_host import fs_call as _bashswift_fs_call_raw
+from _bashswift_host import network_call as _bashswift_network_call_raw
 
 _BASHSWIFT_STATE = {
     'cwd': '/',
@@ -560,6 +691,39 @@ def _fs_call(op, payload=None):
         message = response.get('error') or 'filesystem bridge error'
         raise OSError(message)
     return response
+
+
+def _network_call(url, method='CONNECT'):
+    request = {
+        'url': str(url or ''),
+        'method': str(method or 'CONNECT'),
+    }
+    raw = _bashswift_network_call_raw(json.dumps(request, sort_keys=True))
+    response = json.loads(raw or '{}')
+    if not response.get('ok'):
+        message = response.get('error') or 'network access denied'
+        raise PermissionError(message)
+    return response
+
+
+def _network_target_url(host, port=None, scheme='tcp'):
+    host = '' if host is None else str(host)
+    if ':' in host and not host.startswith('['):
+        host = f'[{host}]'
+
+    if port is None:
+        return f'{scheme}://{host}/'
+    return f'{scheme}://{host}:{int(port)}/'
+
+
+def _authorize_socket_target(address):
+    if isinstance(address, tuple) and address:
+        host = address[0]
+        port = address[1] if len(address) > 1 else None
+    else:
+        host = address
+        port = None
+    _network_call(_network_target_url(host, port), method='CONNECT')
 
 
 def _read_file_bytes(path):
@@ -1039,6 +1203,19 @@ def _patch_runtime():
     os.spawnlp = _blocked
     os.spawnv = _blocked
     os.spawnvp = _blocked
+
+    _original_socket_connect = socket.socket.connect
+    _original_socket_connect_ex = socket.socket.connect_ex
+    def _socket_connect(self, address):
+        _authorize_socket_target(address)
+        return _original_socket_connect(self, address)
+
+    def _socket_connect_ex(self, address):
+        _authorize_socket_target(address)
+        return _original_socket_connect_ex(self, address)
+
+    socket.socket.connect = _socket_connect
+    socket.socket.connect_ex = _socket_connect_ex
 
     _tempfile.gettempdir = lambda: '/tmp'
 

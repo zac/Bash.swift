@@ -111,6 +111,41 @@ struct CPythonRuntimeIntegrationTests {
         #expect(osSystem.stderrString.contains("PermissionError"))
     }
 
+    @Test("network policy blocks private socket targets")
+    @BashPythonTestActor
+    func networkPolicyBlocksPrivateSocketTargets() async throws {
+        let (session, root) = try await PythonTestSupport.makeSession(
+            networkPolicy: NetworkPolicy(denyPrivateRanges: true)
+        )
+        defer { PythonTestSupport.removeDirectory(root) }
+
+        let result = await session.run(#"python3 -c "import socket; socket.socket().connect(('127.0.0.1', 80))""#)
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("private network host"))
+    }
+
+    @Test("python network checks reuse host callback after policy passes")
+    @BashPythonTestActor
+    func pythonNetworkChecksReuseHostCallbackAfterPolicyPasses() async throws {
+        let (session, root) = try await PythonTestSupport.makeSession(
+            networkPolicy: NetworkPolicy(allowedHosts: ["1.1.1.1"]),
+            permissionHandler: { request in
+                switch request.kind {
+                case let .network(network):
+                    if network.url.hasPrefix("tcp://1.1.1.1:80/") {
+                        return .deny(message: "blocked by callback")
+                    }
+                    return .allow
+                }
+            }
+        )
+        defer { PythonTestSupport.removeDirectory(root) }
+
+        let result = await session.run(#"python3 -c "import socket; socket.socket().connect(('1.1.1.1', 80))""#)
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("blocked by callback"))
+    }
+
     @Test("in-memory filesystem path works")
     @BashPythonTestActor
     func inMemoryFilesystemWorks() async throws {

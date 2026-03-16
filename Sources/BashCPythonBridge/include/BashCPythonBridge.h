@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 typedef const char *(*BashCPythonFSHandler)(void *context, const char *request_json);
+typedef const char *(*BashCPythonNetworkHandler)(void *context, const char *request_json);
 
 typedef struct BashCPythonRuntime BashCPythonRuntime;
 
@@ -19,6 +20,12 @@ void bash_cpython_runtime_destroy(BashCPythonRuntime *runtime);
 void bash_cpython_runtime_set_fs_handler(
     BashCPythonRuntime *runtime,
     BashCPythonFSHandler handler,
+    void *context
+);
+
+void bash_cpython_runtime_set_network_handler(
+    BashCPythonRuntime *runtime,
+    BashCPythonNetworkHandler handler,
     void *context
 );
 

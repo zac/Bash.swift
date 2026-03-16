@@ -19,7 +19,7 @@ public struct CommandContext: Sendable {
     public var stderr: Data
     let secretTracker: SecretExposureTracker?
     let jobControl: (any ShellJobControlling)?
-    let permissionAuthorizer: PermissionAuthorizer
+    let permissionAuthorizer: any PermissionAuthorizing
 
     public init(
         commandName: String,
@@ -75,7 +75,7 @@ public struct CommandContext: Sendable {
         stderr: Data = Data(),
         secretTracker: SecretExposureTracker?,
         jobControl: (any ShellJobControlling)? = nil,
-        permissionAuthorizer: PermissionAuthorizer = PermissionAuthorizer()
+        permissionAuthorizer: any PermissionAuthorizing = PermissionAuthorizer()
     ) {
         self.commandName = commandName
         self.arguments = arguments
@@ -176,6 +176,22 @@ public struct CommandContext: Sendable {
         _ request: PermissionRequest
     ) async -> PermissionDecision {
         await permissionAuthorizer.authorize(request)
+    }
+
+    public func requestNetworkPermission(
+        url: String,
+        method: String
+    ) async -> PermissionDecision {
+        await requestPermission(
+            PermissionRequest(
+                command: commandName,
+                kind: .network(NetworkPermissionRequest(url: url, method: method))
+            )
+        )
+    }
+
+    public var permissionDelegate: any PermissionAuthorizing {
+        permissionAuthorizer
     }
 
     public mutating func runSubcommand(

@@ -1198,17 +1198,10 @@ struct CurlCommand: BuiltinCommand {
         context: inout CommandContext,
         options: Options
     ) async -> Int32? {
-        let request = PermissionRequest(
-            command: context.commandName,
-            kind: .network(
-                NetworkPermissionRequest(
-                    url: url.absoluteString,
-                    method: method
-                )
-            )
+        let decision = await context.requestNetworkPermission(
+            url: url.absoluteString,
+            method: method
         )
-
-        let decision = await context.requestPermission(request)
         if case let .deny(message) = decision {
             let reason = message ?? "network access denied: \(method) \(url.absoluteString)"
             return emitError(

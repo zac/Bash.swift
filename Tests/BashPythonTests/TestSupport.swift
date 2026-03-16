@@ -15,15 +15,31 @@ enum PythonTestSupport {
         return url
     }
 
-    static func makeSession() async throws -> (session: BashSession, root: URL) {
+    static func makeSession(
+        networkPolicy: NetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
+    ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
-        let session = try await BashSession(rootDirectory: root)
+        let session = try await BashSession(
+            rootDirectory: root,
+            options: SessionOptions(
+                networkPolicy: networkPolicy,
+                permissionHandler: permissionHandler
+            )
+        )
         await session.registerPython()
         return (session, root)
     }
 
-    static func makeInMemorySession() async throws -> BashSession {
-        let options = SessionOptions(filesystem: InMemoryFilesystem())
+    static func makeInMemorySession(
+        networkPolicy: NetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
+    ) async throws -> BashSession {
+        let options = SessionOptions(
+            filesystem: InMemoryFilesystem(),
+            networkPolicy: networkPolicy,
+            permissionHandler: permissionHandler
+        )
         let session = try await BashSession(options: options)
         await session.registerPython()
         return session

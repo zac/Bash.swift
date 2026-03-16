@@ -18,6 +18,8 @@
 struct BashCPythonRuntime {
     BashCPythonFSHandler fs_handler;
     void *fs_context;
+    BashCPythonNetworkHandler network_handler;
+    void *network_context;
     int initialized;
     char *bootstrap_script;
 };
@@ -123,8 +125,33 @@ static PyObject *bashswift_fs_call(PyObject *self, PyObject *args) {
     return result;
 }
 
+static PyObject *bashswift_network_call(PyObject *self, PyObject *args) {
+    (void)self;
+
+    const char *request_json = NULL;
+    if (!PyArg_ParseTuple(args, "s", &request_json)) {
+        return NULL;
+    }
+
+    if (g_current_runtime == NULL || g_current_runtime->network_handler == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "network bridge is not active");
+        return NULL;
+    }
+
+    const char *response_json = g_current_runtime->network_handler(g_current_runtime->network_context, request_json);
+    if (response_json == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "network bridge returned no response");
+        return NULL;
+    }
+
+    PyObject *result = PyUnicode_FromString(response_json);
+    free((void *)response_json);
+    return result;
+}
+
 static PyMethodDef bashswift_host_methods[] = {
     {"fs_call", bashswift_fs_call, METH_VARARGS, "Perform a filesystem operation through the host bridge."},
+    {"network_call", bashswift_network_call, METH_VARARGS, "Perform a network permission check through the host bridge."},
     {NULL, NULL, 0, NULL}
 };
 
@@ -227,6 +254,8 @@ BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, ch
     runtime->initialized = 0;
     runtime->fs_handler = NULL;
     runtime->fs_context = NULL;
+    runtime->network_handler = NULL;
+    runtime->network_context = NULL;
     g_active_runtime_count += 1;
 
     return runtime;
@@ -274,6 +303,19 @@ void bash_cpython_runtime_set_fs_handler(
 
     runtime->fs_handler = handler;
     runtime->fs_context = context;
+}
+
+void bash_cpython_runtime_set_network_handler(
+    BashCPythonRuntime *runtime,
+    BashCPythonNetworkHandler handler,
+    void *context
+) {
+    if (runtime == NULL) {
+        return;
+    }
+
+    runtime->network_handler = handler;
+    runtime->network_context = context;
 }
 
 char *bash_cpython_runtime_execute(

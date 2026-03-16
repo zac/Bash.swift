@@ -7,6 +7,7 @@ public enum PythonExecutionMode: String, Sendable {
 }
 
 public struct PythonExecutionRequest: Sendable {
+    public var commandName: String
     public var mode: PythonExecutionMode
     public var source: String
     public var scriptPath: String?
@@ -14,16 +15,20 @@ public struct PythonExecutionRequest: Sendable {
     public var currentDirectory: String
     public var environment: [String: String]
     public var stdin: String
+    public var permissionAuthorizer: (any PermissionAuthorizing)?
 
     public init(
+        commandName: String,
         mode: PythonExecutionMode,
         source: String,
         scriptPath: String?,
         arguments: [String],
         currentDirectory: String,
         environment: [String: String],
-        stdin: String
+        stdin: String,
+        permissionAuthorizer: (any PermissionAuthorizing)? = nil
     ) {
+        self.commandName = commandName
         self.mode = mode
         self.source = source
         self.scriptPath = scriptPath
@@ -31,6 +36,7 @@ public struct PythonExecutionRequest: Sendable {
         self.currentDirectory = currentDirectory
         self.environment = environment
         self.stdin = stdin
+        self.permissionAuthorizer = permissionAuthorizer
     }
 }
 

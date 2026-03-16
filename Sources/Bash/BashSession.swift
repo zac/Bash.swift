@@ -237,7 +237,10 @@ public final actor BashSession {
         self.options = options
         filesystemStore = configuredFilesystem
         jobManager = ShellJobManager()
-        permissionAuthorizer = PermissionAuthorizer(handler: options.permissionHandler)
+        permissionAuthorizer = PermissionAuthorizer(
+            networkPolicy: options.networkPolicy,
+            handler: options.permissionHandler
+        )
 
         commandRegistry = [:]
         shellFunctionStore = [:]
