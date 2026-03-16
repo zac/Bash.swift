@@ -162,6 +162,16 @@ struct CurlCommand: BuiltinCommand {
         }
 
         let method = resolvedMethod(options: options)
+        if scheme == "http" || scheme == "https",
+           let denied = await authorizeNetworkRequest(
+               url: url,
+               method: method,
+               context: &context,
+               options: options
+           ) {
+            return denied
+        }
+
         let requestBodyResult = await buildRequestBody(
             options: options,
             dataTokens: options.data,
@@ -1179,6 +1189,37 @@ struct CurlCommand: BuiltinCommand {
             properties[HTTPCookiePropertyKey("HttpOnly")] = "TRUE"
         }
         return HTTPCookie(properties: properties)
+    }
+
+    @discardableResult
+    private static func authorizeNetworkRequest(
+        url: URL,
+        method: String,
+        context: inout CommandContext,
+        options: Options
+    ) async -> Int32? {
+        let request = PermissionRequest(
+            command: context.commandName,
+            kind: .network(
+                NetworkPermissionRequest(
+                    url: url.absoluteString,
+                    method: method
+                )
+            )
+        )
+
+        let decision = await context.requestPermission(request)
+        if case let .deny(message) = decision {
+            let reason = message ?? "network access denied: \(method) \(url.absoluteString)"
+            return emitError(
+                &context,
+                options: options,
+                code: 1,
+                message: "curl: \(reason)\n"
+            )
+        }
+
+        return nil
     }
 
     @discardableResult

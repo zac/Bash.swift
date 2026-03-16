@@ -12,7 +12,8 @@ enum TestSupport {
     static func makeSession(
         filesystem: (any ShellFilesystem)? = nil,
         layout: SessionLayout = .unixLike,
-        enableGlobbing: Bool = true
+        enableGlobbing: Bool = true,
+        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
     ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
         let options = SessionOptions(
@@ -20,7 +21,8 @@ enum TestSupport {
             layout: layout,
             initialEnvironment: [:],
             enableGlobbing: enableGlobbing,
-            maxHistory: 1_000
+            maxHistory: 1_000,
+            permissionHandler: permissionHandler
         )
 
         let session = try await BashSession(rootDirectory: root, options: options)

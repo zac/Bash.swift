@@ -114,6 +114,7 @@ public struct SessionOptions: Sendable {
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
+    public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
     public var secretOutputRedactor: any SecretOutputRedacting
@@ -124,6 +125,7 @@ public struct SessionOptions: Sendable {
         initialEnvironment: [String: String] = [:],
         enableGlobbing: Bool = true,
         maxHistory: Int = 1_000,
+        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil,
         secretPolicy: SecretHandlingPolicy = .off,
         secretResolver: (any SecretReferenceResolving)? = nil,
         secretOutputRedactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()
@@ -133,6 +135,7 @@ public struct SessionOptions: Sendable {
         self.initialEnvironment = initialEnvironment
         self.enableGlobbing = enableGlobbing
         self.maxHistory = maxHistory
+        self.permissionHandler = permissionHandler
         self.secretPolicy = secretPolicy
         self.secretResolver = secretResolver
         self.secretOutputRedactor = secretOutputRedactor

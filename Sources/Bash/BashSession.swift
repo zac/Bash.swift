@@ -4,6 +4,7 @@ public final actor BashSession {
     private let filesystemStore: any ShellFilesystem
     private let options: SessionOptions
     private let jobManager: ShellJobManager
+    private let permissionAuthorizer: PermissionAuthorizer
 
     private var currentDirectoryStore: String
     private var environmentStore: [String: String]
@@ -236,6 +237,7 @@ public final actor BashSession {
         self.options = options
         filesystemStore = configuredFilesystem
         jobManager = ShellJobManager()
+        permissionAuthorizer = PermissionAuthorizer(handler: options.permissionHandler)
 
         commandRegistry = [:]
         shellFunctionStore = [:]
@@ -403,6 +405,7 @@ public final actor BashSession {
             shellFunctions: shellFunctions,
             enableGlobbing: options.enableGlobbing,
             jobControl: jobControl,
+            permissionAuthorizer: permissionAuthorizer,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,

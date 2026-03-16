@@ -227,6 +227,30 @@ public struct RunOptions {
 
 Use `RunOptions` when you want a Cloudflare-style per-execution override without changing the session's persisted shell state. Filesystem mutations still persist; environment, working-directory, and function changes from that run do not.
 
+### `PermissionRequest` and `PermissionDecision`
+
+```swift
+public struct PermissionRequest {
+    public enum Kind {
+        case network(NetworkPermissionRequest)
+    }
+
+    public var command: String
+    public var kind: Kind
+}
+
+public struct NetworkPermissionRequest {
+    public var url: String
+    public var method: String
+}
+
+public enum PermissionDecision {
+    case allow
+    case allowForSession
+    case deny(message: String?)
+}
+```
+
 ### `SessionOptions`
 
 ```swift
@@ -236,6 +260,7 @@ public struct SessionOptions {
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
+    public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
     public var secretOutputRedactor: any SecretOutputRedacting
@@ -248,9 +273,28 @@ Defaults:
 - `initialEnvironment`: `[:]`
 - `enableGlobbing`: `true`
 - `maxHistory`: `1000`
+- `permissionHandler`: `nil`
 - `secretPolicy`: `.off`
 - `secretResolver`: `nil`
 - `secretOutputRedactor`: `DefaultSecretOutputRedactor()`
+
+Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
+
+Example HTTP(S) permission gate:
+
+```swift
+let options = SessionOptions(
+    permissionHandler: { request in
+        switch request.kind {
+        case let .network(network):
+            if network.url.hasPrefix("https://api.example.com/") {
+                return .allowForSession
+            }
+            return .deny(message: "network access denied")
+        }
+    }
+)
+```
 
 Available filesystem implementations:
 - `ReadWriteFilesystem`: root-jail wrapper over real disk I/O.
@@ -471,6 +515,7 @@ All implemented commands support `--help`.
 | `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
 
 When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
+When `SessionOptions.permissionHandler` is set, `curl` and `wget` ask it before outbound HTTP(S) requests. `data:` and jailed `file:` URLs do not trigger the callback.
 
 ## Command Behaviors and Notes
 

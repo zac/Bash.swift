@@ -2,6 +2,18 @@ import Foundation
 import Testing
 @testable import Bash
 
+actor PermissionProbe {
+    private var requests: [PermissionRequest] = []
+
+    func record(_ request: PermissionRequest) {
+        requests.append(request)
+    }
+
+    func snapshot() -> [PermissionRequest] {
+        requests
+    }
+}
+
 @Suite("Session Integration")
 struct SessionIntegrationTests {
     @Test("touch then ls mutates read-write filesystem")
@@ -1532,6 +1544,92 @@ struct SessionIntegrationTests {
         let unsupported = await session.run("curl ftp://example.com/data")
         #expect(unsupported.exitCode != 0)
         #expect(unsupported.stderrString.contains("unsupported URL scheme"))
+    }
+
+    @Test("curl permission handler can deny outbound http requests")
+    func curlPermissionHandlerCanDenyOutboundHTTPRequests() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                return .deny(message: "network access denied")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl http://127.0.0.1:1")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString == "curl: network access denied\n")
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+        #expect(requests[0].command == "curl")
+        switch requests[0].kind {
+        case let .network(network):
+            #expect(network.url == "http://127.0.0.1:1")
+            #expect(network.method == "GET")
+        }
+    }
+
+    @Test("curl permission handler allow once does not persist")
+    func curlPermissionHandlerAllowOnceDoesNotPersist() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                return .allow
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let first = await session.run("curl --connect-timeout 0.1 http://127.0.0.1:1")
+        let second = await session.run("curl --connect-timeout 0.1 http://127.0.0.1:1")
+
+        #expect(first.exitCode != 0)
+        #expect(second.exitCode != 0)
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 2)
+    }
+
+    @Test("curl permission handler can allow for session")
+    func curlPermissionHandlerCanAllowForSession() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                return .allowForSession
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let first = await session.run("curl --connect-timeout 0.1 http://127.0.0.1:1")
+        let second = await session.run("curl --connect-timeout 0.1 http://127.0.0.1:1")
+
+        #expect(first.exitCode != 0)
+        #expect(second.exitCode != 0)
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+    }
+
+    @Test("curl permission handler is skipped for non-http urls")
+    func curlPermissionHandlerIsSkippedForNonHTTPURLs() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                return .deny(message: "network access denied")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl data:text/plain,ok")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "ok")
+
+        let requests = await probe.snapshot()
+        #expect(requests.isEmpty)
     }
 
     @Test("html-to-markdown command parity chunk")

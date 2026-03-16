@@ -19,6 +19,7 @@ public struct CommandContext: Sendable {
     public var stderr: Data
     let secretTracker: SecretExposureTracker?
     let jobControl: (any ShellJobControlling)?
+    let permissionAuthorizer: PermissionAuthorizer
 
     public init(
         commandName: String,
@@ -52,7 +53,8 @@ public struct CommandContext: Sendable {
             stdout: stdout,
             stderr: stderr,
             secretTracker: nil,
-            jobControl: nil
+            jobControl: nil,
+            permissionAuthorizer: PermissionAuthorizer()
         )
     }
 
@@ -72,7 +74,8 @@ public struct CommandContext: Sendable {
         stdout: Data = Data(),
         stderr: Data = Data(),
         secretTracker: SecretExposureTracker?,
-        jobControl: (any ShellJobControlling)? = nil
+        jobControl: (any ShellJobControlling)? = nil,
+        permissionAuthorizer: PermissionAuthorizer = PermissionAuthorizer()
     ) {
         self.commandName = commandName
         self.arguments = arguments
@@ -90,6 +93,7 @@ public struct CommandContext: Sendable {
         self.stderr = stderr
         self.secretTracker = secretTracker
         self.jobControl = jobControl
+        self.permissionAuthorizer = permissionAuthorizer
     }
 
     public mutating func writeStdout(_ string: String) {
@@ -168,6 +172,12 @@ public struct CommandContext: Sendable {
         return value
     }
 
+    public func requestPermission(
+        _ request: PermissionRequest
+    ) async -> PermissionDecision {
+        await permissionAuthorizer.authorize(request)
+    }
+
     public mutating func runSubcommand(
         _ argv: [String],
         stdin: Data? = nil
@@ -210,7 +220,8 @@ public struct CommandContext: Sendable {
             environment: environment,
             stdin: stdin ?? self.stdin,
             secretTracker: secretTracker,
-            jobControl: jobControl
+            jobControl: jobControl,
+            permissionAuthorizer: permissionAuthorizer
         )
 
         let exitCode = await implementation.runCommand(&childContext, commandArgs)
