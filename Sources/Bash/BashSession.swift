@@ -36,6 +36,60 @@ public final actor BashSession {
     }
 
     public func run(_ commandLine: String, stdin: Data = Data()) async -> CommandResult {
+        await run(commandLine, options: RunOptions(stdin: stdin))
+    }
+
+    public func run(_ commandLine: String, options: RunOptions) async -> CommandResult {
+        let usesTemporaryState = options.currentDirectory != nil
+            || !options.environment.isEmpty
+            || options.replaceEnvironment
+        guard usesTemporaryState else {
+            return await runPersistingState(commandLine, stdin: options.stdin)
+        }
+
+        let savedCurrentDirectory = currentDirectoryStore
+        let savedEnvironment = environmentStore
+        let savedFunctions = shellFunctionStore
+
+        if let overrideDirectory = options.currentDirectory {
+            do {
+                try PathUtils.validate(overrideDirectory)
+            } catch {
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("\(error)\n".utf8),
+                    exitCode: 2
+                )
+            }
+        }
+
+        if options.replaceEnvironment {
+            environmentStore = [:]
+        }
+
+        if let overrideDirectory = options.currentDirectory {
+            currentDirectoryStore = PathUtils.normalize(
+                path: overrideDirectory,
+                currentDirectory: savedCurrentDirectory
+            )
+            if options.environment["PWD"] == nil {
+                environmentStore["PWD"] = currentDirectoryStore
+            }
+        }
+
+        if !options.environment.isEmpty {
+            environmentStore.merge(options.environment) { _, rhs in rhs }
+        }
+
+        let result = await runPersistingState(commandLine, stdin: options.stdin)
+
+        currentDirectoryStore = savedCurrentDirectory
+        environmentStore = savedEnvironment
+        shellFunctionStore = savedFunctions
+        return result
+    }
+
+    private func runPersistingState(_ commandLine: String, stdin: Data) async -> CommandResult {
         let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)

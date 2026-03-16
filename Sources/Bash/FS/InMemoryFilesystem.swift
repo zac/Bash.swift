@@ -80,12 +80,14 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func stat(path: String) async throws -> FileInfo {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let node = try node(at: normalized, followFinalSymlink: false)
         return fileInfo(for: node, path: normalized)
     }
 
     public func listDirectory(path: String) async throws -> [DirectoryEntry] {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let node = try node(at: normalized, followFinalSymlink: true)
 
@@ -103,6 +105,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func readFile(path: String) async throws -> Data {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let node = try node(at: normalized, followFinalSymlink: true)
 
@@ -114,6 +117,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func writeFile(path: String, data: Data, append: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         guard normalized != "/" else {
             throw posixError(EISDIR)
@@ -144,6 +148,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func createDirectory(path: String, recursive: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         if normalized == "/" {
             return
@@ -181,6 +186,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func remove(path: String, recursive: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         if normalized == "/" {
             throw posixError(EPERM)
@@ -201,6 +207,8 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func move(from sourcePath: String, to destinationPath: String) async throws {
+        try PathUtils.validate(sourcePath)
+        try PathUtils.validate(destinationPath)
         let source = PathUtils.normalize(path: sourcePath, currentDirectory: "/")
         let destination = PathUtils.normalize(path: destinationPath, currentDirectory: "/")
 
@@ -234,6 +242,8 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func copy(from sourcePath: String, to destinationPath: String, recursive: Bool) async throws {
+        try PathUtils.validate(sourcePath)
+        try PathUtils.validate(destinationPath)
         let source = PathUtils.normalize(path: sourcePath, currentDirectory: "/")
         let destination = PathUtils.normalize(path: destinationPath, currentDirectory: "/")
 
@@ -254,6 +264,8 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func createSymlink(path: String, target: String) async throws {
+        try PathUtils.validate(path)
+        try PathUtils.validate(target)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         guard normalized != "/" else {
             throw posixError(EEXIST)
@@ -271,6 +283,8 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func createHardLink(path: String, target: String) async throws {
+        try PathUtils.validate(path)
+        try PathUtils.validate(target)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         guard normalized != "/" else {
             throw posixError(EEXIST)
@@ -294,6 +308,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func readSymlink(path: String) async throws -> String {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let node = try node(at: normalized, followFinalSymlink: false)
 
@@ -305,6 +320,7 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func setPermissions(path: String, permissions: Int) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let node = try node(at: normalized, followFinalSymlink: false)
         node.permissions = permissions
@@ -312,11 +328,17 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func resolveRealPath(path: String) async throws -> String {
-        try resolvePath(path: PathUtils.normalize(path: path, currentDirectory: "/"), followFinalSymlink: true, symlinkDepth: 0)
+        try PathUtils.validate(path)
+        return try resolvePath(
+            path: PathUtils.normalize(path: path, currentDirectory: "/"),
+            followFinalSymlink: true,
+            symlinkDepth: 0
+        )
     }
 
     public func exists(path: String) async -> Bool {
         do {
+            try PathUtils.validate(path)
             let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
             _ = try node(at: normalized, followFinalSymlink: true)
             return true
@@ -326,6 +348,8 @@ public final class InMemoryFilesystem: SessionConfigurableFilesystem, @unchecked
     }
 
     public func glob(pattern: String, currentDirectory: String) async throws -> [String] {
+        try PathUtils.validate(pattern)
+        try PathUtils.validate(currentDirectory)
         let normalizedPattern = PathUtils.normalize(path: pattern, currentDirectory: currentDirectory)
         if !PathUtils.containsGlob(normalizedPattern) {
             return await exists(path: normalizedPattern) ? [normalizedPattern] : []

@@ -182,6 +182,30 @@ struct ParserAndFilesystemTests {
         #expect(read.stderrString.contains("invalid path"))
     }
 
+    @Test("filesystems reject paths with null bytes")
+    func filesystemsRejectPathsWithNullBytes() async throws {
+        let inMemory = InMemoryFilesystem()
+        try inMemory.configureForSession()
+
+        do {
+            _ = try await inMemory.readFile(path: "/bad\u{0}name")
+            Issue.record("expected in-memory null-byte rejection")
+        } catch {
+            #expect("\(error)".contains("null byte"))
+        }
+
+        let root = try TestSupport.makeTempDirectory(prefix: "BashNullPath")
+        defer { TestSupport.removeDirectory(root) }
+
+        let readWrite = try ReadWriteFilesystem(rootDirectory: root)
+        do {
+            try await readWrite.writeFile(path: "/bad\u{0}name", data: Data(), append: false)
+            Issue.record("expected read-write null-byte rejection")
+        } catch {
+            #expect("\(error)".contains("null byte"))
+        }
+    }
+
     @Test("command stubs created for path invocation")
     func commandStubsCreatedForPathInvocation() async throws {
         let (session, root) = try await TestSupport.makeSession()

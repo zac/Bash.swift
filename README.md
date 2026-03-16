@@ -85,6 +85,19 @@ let piped = await session.run("echo hello | tee out.txt > copy.txt")
 print(piped.exitCode) // 0
 ```
 
+For isolated one-off overrides without mutating the session's persisted `cwd` or environment:
+
+```swift
+let scoped = await session.run(
+    "pwd && echo $MODE",
+    options: RunOptions(
+        environment: ["MODE": "preview"],
+        currentDirectory: "/tmp"
+    )
+)
+print(scoped.stdoutString)
+```
+
 Optional `sqlite3` registration:
 
 ```swift
@@ -181,6 +194,7 @@ public final actor BashSession {
     public init(rootDirectory: URL, options: SessionOptions = .init()) async throws
     public init(options: SessionOptions = .init()) async throws
     public func run(_ commandLine: String, stdin: Data = Data()) async -> CommandResult
+    public func run(_ commandLine: String, options: RunOptions) async -> CommandResult
     public func register(_ command: any BuiltinCommand.Type) async
     public var currentDirectory: String { get async }
     public var environment: [String: String] { get async }
@@ -199,6 +213,19 @@ public struct CommandResult {
     public var stderrString: String { get }
 }
 ```
+
+### `RunOptions`
+
+```swift
+public struct RunOptions {
+    public var stdin: Data
+    public var environment: [String: String]
+    public var replaceEnvironment: Bool
+    public var currentDirectory: String?
+}
+```
+
+Use `RunOptions` when you want a Cloudflare-style per-execution override without changing the session's persisted shell state. Filesystem mutations still persist; environment, working-directory, and function changes from that run do not.
 
 ### `SessionOptions`
 
@@ -245,6 +272,8 @@ Execution pipeline:
 4. The session state is updated (`cwd`, environment, history).
 5. `CommandResult` is returned.
 
+`run(_:options:)` follows the same pipeline, but starts from temporary environment / cwd overrides and restores the session shell state afterward.
+
 ### Supported Shell Features
 
 - Quoting and escaping (`'...'`, `"..."`, `\\`)
@@ -280,6 +309,7 @@ Built-in filesystem options:
 Behavior guarantees:
 - All operations are scoped under the filesystem root.
 - For `ReadWriteFilesystem`, symlink escapes outside root are blocked.
+- Filesystem implementations reject paths containing null bytes.
 - Built-in command stubs are created under `/bin` and `/usr/bin` inside the selected filesystem.
 - Unsupported platform features are surfaced as runtime `ShellError.unsupported(...)`, while all current package targets still compile.
 

@@ -1,6 +1,12 @@
 import Foundation
 
 enum PathUtils {
+    static func validate(_ path: String) throws {
+        if path.contains("\u{0}") {
+            throw ShellError.invalidPath(path)
+        }
+    }
+
     static func normalize(path: String, currentDirectory: String) -> String {
         if path.isEmpty {
             return currentDirectory

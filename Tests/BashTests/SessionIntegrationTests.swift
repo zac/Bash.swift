@@ -54,6 +54,61 @@ struct SessionIntegrationTests {
         #expect(fallback.stdoutString == "fallback\n")
     }
 
+    @Test("run options environment override is isolated from session state")
+    func runOptionsEnvironmentOverrideIsIsolatedFromSessionState() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let isolated = await session.run(
+            "export TEMP=mutated; echo $TEMP",
+            options: RunOptions(environment: ["TEMP": "seed"])
+        )
+        #expect(isolated.exitCode == 0)
+        #expect(isolated.stdoutString == "mutated\n")
+
+        let restored = await session.run("echo $TEMP")
+        #expect(restored.exitCode == 0)
+        #expect(restored.stdoutString == "\n")
+    }
+
+    @Test("run options current directory override is isolated from session state")
+    func runOptionsCurrentDirectoryOverrideIsIsolatedFromSessionState() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p tempdir && echo scoped > tempdir/file.txt")
+
+        let isolated = await session.run(
+            "pwd && cat file.txt",
+            options: RunOptions(currentDirectory: "/home/user/tempdir")
+        )
+        #expect(isolated.exitCode == 0)
+        #expect(isolated.stdoutString == "/home/user/tempdir\nscoped\n")
+
+        let restored = await session.run("pwd")
+        #expect(restored.exitCode == 0)
+        #expect(restored.stdoutString == "/home/user\n")
+    }
+
+    @Test("run options can replace environment without mutating session")
+    func runOptionsCanReplaceEnvironmentWithoutMutatingSession() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("export PERSIST=value")
+
+        let isolated = await session.run(
+            "printenv PERSIST",
+            options: RunOptions(replaceEnvironment: true)
+        )
+        #expect(isolated.exitCode == 1)
+        #expect(isolated.stdoutString.isEmpty)
+
+        let restored = await session.run("printenv PERSIST")
+        #expect(restored.exitCode == 0)
+        #expect(restored.stdoutString == "value\n")
+    }
+
     @Test("command substitution writes evaluated output")
     func commandSubstitutionWritesEvaluatedOutput() async throws {
         let (session, root) = try await TestSupport.makeSession()

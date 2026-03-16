@@ -23,6 +23,7 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func stat(path: String) async throws -> FileInfo {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         let attributes = try fileManager.attributesOfItem(atPath: url.path)
@@ -45,6 +46,7 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func listDirectory(path: String) async throws -> [DirectoryEntry] {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         var isDirectory: ObjCBool = false
@@ -64,12 +66,14 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func readFile(path: String) async throws -> Data {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         return try Data(contentsOf: url)
     }
 
     public func writeFile(path: String, data: Data, append: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try creationURL(for: normalized)
 
@@ -87,12 +91,14 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func createDirectory(path: String, recursive: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try creationURL(for: normalized)
         try fileManager.createDirectory(at: url, withIntermediateDirectories: recursive)
     }
 
     public func remove(path: String, recursive: Bool) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
 
@@ -111,6 +117,8 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func move(from sourcePath: String, to destinationPath: String) async throws {
+        try PathUtils.validate(sourcePath)
+        try PathUtils.validate(destinationPath)
         let source = try existingURL(for: PathUtils.normalize(path: sourcePath, currentDirectory: "/"))
         let destination = try creationURL(for: PathUtils.normalize(path: destinationPath, currentDirectory: "/"))
         let parent = destination.deletingLastPathComponent()
@@ -119,6 +127,8 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func copy(from sourcePath: String, to destinationPath: String, recursive: Bool) async throws {
+        try PathUtils.validate(sourcePath)
+        try PathUtils.validate(destinationPath)
         let sourceVirtual = PathUtils.normalize(path: sourcePath, currentDirectory: "/")
         let source = try existingURL(for: sourceVirtual)
         let destination = try creationURL(for: PathUtils.normalize(path: destinationPath, currentDirectory: "/"))
@@ -142,6 +152,8 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func createSymlink(path: String, target: String) async throws {
+        try PathUtils.validate(path)
+        try PathUtils.validate(target)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try creationURL(for: normalized)
         let parent = url.deletingLastPathComponent()
@@ -150,6 +162,8 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func createHardLink(path: String, target: String) async throws {
+        try PathUtils.validate(path)
+        try PathUtils.validate(target)
         let normalizedLink = PathUtils.normalize(path: path, currentDirectory: "/")
         let normalizedTarget = PathUtils.normalize(path: target, currentDirectory: "/")
         let linkURL = try creationURL(for: normalizedLink)
@@ -161,18 +175,21 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func readSymlink(path: String) async throws -> String {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         return try fileManager.destinationOfSymbolicLink(atPath: url.path)
     }
 
     public func setPermissions(path: String, permissions: Int) async throws {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         try fileManager.setAttributes([.posixPermissions: permissions], ofItemAtPath: url.path)
     }
 
     public func resolveRealPath(path: String) async throws -> String {
+        try PathUtils.validate(path)
         let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
         let url = try existingURL(for: normalized)
         let resolved = url.resolvingSymlinksInPath().standardizedFileURL
@@ -182,6 +199,7 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
 
     public func exists(path: String) async -> Bool {
         do {
+            try PathUtils.validate(path)
             let normalized = PathUtils.normalize(path: path, currentDirectory: "/")
             let url = try existingOrPotentialURL(for: normalized)
             return fileManager.fileExists(atPath: url.path)
@@ -191,6 +209,8 @@ public final class ReadWriteFilesystem: ShellFilesystem, @unchecked Sendable {
     }
 
     public func glob(pattern: String, currentDirectory: String) async throws -> [String] {
+        try PathUtils.validate(pattern)
+        try PathUtils.validate(currentDirectory)
         let normalizedPattern = PathUtils.normalize(path: pattern, currentDirectory: currentDirectory)
         if !PathUtils.containsGlob(normalizedPattern) {
             return await exists(path: normalizedPattern) ? [normalizedPattern] : []

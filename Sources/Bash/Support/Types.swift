@@ -20,6 +20,25 @@ public struct CommandResult: Sendable {
     }
 }
 
+public struct RunOptions: Sendable {
+    public var stdin: Data
+    public var environment: [String: String]
+    public var replaceEnvironment: Bool
+    public var currentDirectory: String?
+
+    public init(
+        stdin: Data = Data(),
+        environment: [String: String] = [:],
+        replaceEnvironment: Bool = false,
+        currentDirectory: String? = nil
+    ) {
+        self.stdin = stdin
+        self.environment = environment
+        self.replaceEnvironment = replaceEnvironment
+        self.currentDirectory = currentDirectory
+    }
+}
+
 public enum SessionLayout: Sendable {
     case unixLike
     case rootOnly
@@ -128,6 +147,9 @@ public enum ShellError: Error, CustomStringConvertible, Sendable {
     public var description: String {
         switch self {
         case let .invalidPath(path):
+            if path.contains("\u{0}") {
+                return "path contains null byte"
+            }
             return "invalid path: \(path)"
         case let .parserError(message):
             return message
