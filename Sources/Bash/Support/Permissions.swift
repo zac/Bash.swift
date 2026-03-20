@@ -105,6 +105,43 @@ actor PermissionAuthorizer: PermissionAuthorizing {
 
         return decision
     }
+
+    func authorize(
+        _ request: PermissionRequest,
+        pausing executionControl: ExecutionControl?
+    ) async -> PermissionDecision {
+        if let denial = PermissionPolicyEvaluator.denialMessage(
+            for: request,
+            networkPolicy: networkPolicy
+        ) {
+            return .deny(message: denial)
+        }
+
+        if sessionAllows.contains(request) {
+            return .allow
+        }
+
+        guard let handler else {
+            return .allow
+        }
+
+        if let executionControl {
+            await executionControl.beginPermissionPause()
+        }
+
+        let decision = await handler(request)
+
+        if let executionControl {
+            await executionControl.endPermissionPause()
+        }
+
+        if case .allowForSession = decision {
+            sessionAllows.insert(request)
+            return .allow
+        }
+
+        return decision
+    }
 }
 
 private enum PermissionPolicyEvaluator {

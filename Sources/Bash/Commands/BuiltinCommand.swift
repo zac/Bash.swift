@@ -1,6 +1,60 @@
 import ArgumentParser
 import Foundation
 
+private actor EffectiveWallClock {
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private var pausedDuration: TimeInterval = 0
+    private var pauseDepth = 0
+    private var pauseStartedAt: TimeInterval?
+
+    func beginPause() {
+        if pauseDepth == 0 {
+            pauseStartedAt = ProcessInfo.processInfo.systemUptime
+        }
+        pauseDepth += 1
+    }
+
+    func endPause() {
+        guard pauseDepth > 0 else {
+            return
+        }
+
+        pauseDepth -= 1
+        guard pauseDepth == 0, let pauseStartedAt else {
+            return
+        }
+
+        pausedDuration += max(0, ProcessInfo.processInfo.systemUptime - pauseStartedAt)
+        self.pauseStartedAt = nil
+    }
+
+    func elapsed() -> TimeInterval {
+        let now = ProcessInfo.processInfo.systemUptime
+        var effectivePausedDuration = pausedDuration
+        if let pauseStartedAt {
+            effectivePausedDuration += max(0, now - pauseStartedAt)
+        }
+        return max(0, now - startedAt - effectivePausedDuration)
+    }
+}
+
+private actor PermissionPauseAuthorizer: PermissionAuthorizing {
+    private let base: any PermissionAuthorizing
+    private let clock: EffectiveWallClock
+
+    init(base: any PermissionAuthorizing, clock: EffectiveWallClock) {
+        self.base = base
+        self.clock = clock
+    }
+
+    func authorize(_ request: PermissionRequest) async -> PermissionDecision {
+        await clock.beginPause()
+        let decision = await base.authorize(request)
+        await clock.endPause()
+        return decision
+    }
+}
+
 public struct CommandContext: Sendable {
     public let commandName: String
     public let arguments: [String]
@@ -179,7 +233,14 @@ public struct CommandContext: Sendable {
     public func requestPermission(
         _ request: PermissionRequest
     ) async -> PermissionDecision {
-        await permissionAuthorizer.authorize(request)
+        if let permissionAuthorizer = permissionAuthorizer as? PermissionAuthorizer {
+            return await permissionAuthorizer.authorize(
+                request,
+                pausing: executionControl
+            )
+        }
+
+        return await permissionAuthorizer.authorize(request)
     }
 
     public func requestNetworkPermission(
@@ -212,6 +273,19 @@ public struct CommandContext: Sendable {
         _ argv: [String],
         stdin: Data? = nil
     ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
+        await runSubcommandIsolated(
+            argv,
+            stdin: stdin,
+            executionControlOverride: nil
+        )
+    }
+
+    func runSubcommandIsolated(
+        _ argv: [String],
+        stdin: Data? = nil,
+        executionControlOverride: ExecutionControl?,
+        permissionAuthorizerOverride: (any PermissionAuthorizing)? = nil
+    ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
         guard let commandName = argv.first else {
             return (CommandResult(stdout: Data(), stderr: Data(), exitCode: 0), currentDirectory, environment)
         }
@@ -226,7 +300,9 @@ public struct CommandContext: Sendable {
         }
 
         let commandArgs = Array(argv.dropFirst())
-        if let failure = await executionControl?.recordCommandExecution(commandName: commandName) {
+        let effectiveExecutionControl = executionControlOverride ?? executionControl
+        let effectivePermissionAuthorizer = permissionAuthorizerOverride ?? permissionAuthorizer
+        if let failure = await effectiveExecutionControl?.recordCommandExecution(commandName: commandName) {
             return (
                 CommandResult(
                     stdout: Data(),
@@ -253,8 +329,8 @@ public struct CommandContext: Sendable {
             stdin: stdin ?? self.stdin,
             secretTracker: secretTracker,
             jobControl: jobControl,
-            permissionAuthorizer: permissionAuthorizer,
-            executionControl: executionControl
+            permissionAuthorizer: effectivePermissionAuthorizer,
+            executionControl: effectiveExecutionControl
         )
 
         let exitCode = await implementation.runCommand(&childContext, commandArgs)
@@ -263,6 +339,74 @@ public struct CommandContext: Sendable {
             childContext.currentDirectory,
             childContext.environment
         )
+    }
+
+    public func runSubcommandIsolated(
+        _ argv: [String],
+        stdin: Data? = nil,
+        wallClockTimeout: TimeInterval
+    ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
+        let clock = EffectiveWallClock()
+        let wrappedPermissionAuthorizer = PermissionPauseAuthorizer(
+            base: permissionAuthorizer,
+            clock: clock
+        )
+
+        enum Outcome: Sendable {
+            case completed(CommandResult, String, [String: String])
+            case timedOut
+        }
+
+        let task = Task {
+            await runSubcommandIsolated(
+                argv,
+                stdin: stdin,
+                executionControlOverride: executionControl,
+                permissionAuthorizerOverride: wrappedPermissionAuthorizer
+            )
+        }
+
+        let outcome = await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                let sub = await task.value
+                return .completed(sub.result, sub.currentDirectory, sub.environment)
+            }
+
+            group.addTask {
+                while !Task.isCancelled {
+                    let elapsed = await clock.elapsed()
+                    if elapsed >= wallClockTimeout {
+                        return .timedOut
+                    }
+
+                    let remaining = max(0.001, min(wallClockTimeout - elapsed, 0.01))
+                    let sleepNanos = UInt64(remaining * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: sleepNanos)
+                }
+
+                return .timedOut
+            }
+
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case let .completed(result, currentDirectory, environment):
+            return (result, currentDirectory, environment)
+        case .timedOut:
+            task.cancel()
+            return (
+                CommandResult(
+                    stdout: Data(),
+                    stderr: Data("timeout: command timed out\n".utf8),
+                    exitCode: 124
+                ),
+                currentDirectory,
+                environment
+            )
+        }
     }
 
     private func resolveCommand(named commandName: String) -> AnyBuiltinCommand? {

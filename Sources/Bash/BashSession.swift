@@ -50,7 +50,7 @@ public final actor BashSession {
             cancellationCheck: options.cancellationCheck
         )
         guard usesTemporaryState else {
-            return await runPersistingState(
+            return await runWithExecutionControl(
                 commandLine,
                 stdin: options.stdin,
                 executionControl: executionControl
@@ -91,7 +91,7 @@ public final actor BashSession {
             environmentStore.merge(options.environment) { _, rhs in rhs }
         }
 
-        let result = await runPersistingState(
+        let result = await runWithExecutionControl(
             commandLine,
             stdin: options.stdin,
             executionControl: executionControl
@@ -101,6 +101,71 @@ public final actor BashSession {
         environmentStore = savedEnvironment
         shellFunctionStore = savedFunctions
         return result
+    }
+
+    private func runWithExecutionControl(
+        _ commandLine: String,
+        stdin: Data,
+        executionControl: ExecutionControl
+    ) async -> CommandResult {
+        guard let maxWallClockDuration = executionControl.limits.maxWallClockDuration else {
+            return await runPersistingState(
+                commandLine,
+                stdin: stdin,
+                executionControl: executionControl
+            )
+        }
+
+        enum Outcome {
+            case completed(CommandResult)
+            case timedOut
+        }
+
+        let task = Task {
+            await self.runPersistingState(
+                commandLine,
+                stdin: stdin,
+                executionControl: executionControl
+            )
+        }
+
+        let outcome = await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                .completed(await task.value)
+            }
+
+            group.addTask {
+                while !Task.isCancelled {
+                    let elapsed = await executionControl.currentEffectiveElapsedTime()
+                    if elapsed >= maxWallClockDuration {
+                        return .timedOut
+                    }
+
+                    let remaining = max(0.001, min(maxWallClockDuration - elapsed, 0.01))
+                    let sleepNanos = UInt64(remaining * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: sleepNanos)
+                }
+
+                return .timedOut
+            }
+
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case let .completed(result):
+            return result
+        case .timedOut:
+            await executionControl.markTimedOut()
+            task.cancel()
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("execution timed out\n".utf8),
+                exitCode: 124
+            )
+        }
     }
 
     private func runPersistingState(

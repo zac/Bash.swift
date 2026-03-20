@@ -1830,3 +1830,60 @@ struct SessionIntegrationTests {
         #expect(empty.stdoutString.isEmpty)
     }
 }
+
+@Suite("Session Integration Timeouts", .serialized)
+struct SessionIntegrationTimeoutTests {
+    @Test("execution limits cap wall clock time")
+    func executionLimitsCapWallClockTime() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run(
+            "sleep 0.2",
+            options: RunOptions(
+                executionLimits: ExecutionLimits(maxWallClockDuration: 0.01)
+            )
+        )
+        #expect(result.exitCode == 124)
+        #expect(result.stderrString.contains("execution timed out"))
+    }
+
+    @Test("timeout excludes permission wait time")
+    func timeoutExcludesPermissionWaitTime() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
+            permissionHandler: { _ in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return .deny(message: "blocked after approval wait")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("timeout 0.5 curl https://example.com")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("blocked after approval wait"))
+        #expect(!result.stderrString.contains("timed out"))
+    }
+
+    @Test("wall clock limits exclude permission wait time")
+    func wallClockLimitsExcludePermissionWaitTime() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
+            permissionHandler: { _ in
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return .deny(message: "blocked after approval wait")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run(
+            "curl https://example.com",
+            options: RunOptions(
+                executionLimits: ExecutionLimits(maxWallClockDuration: 0.5)
+            )
+        )
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("blocked after approval wait"))
+        #expect(!result.stderrString.contains("execution timed out"))
+    }
+}

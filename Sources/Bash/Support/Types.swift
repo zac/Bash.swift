@@ -52,17 +52,20 @@ public struct ExecutionLimits: Sendable {
     public var maxFunctionDepth: Int
     public var maxLoopIterations: Int
     public var maxCommandSubstitutionDepth: Int
+    public var maxWallClockDuration: TimeInterval?
 
     public init(
         maxCommandCount: Int = 10_000,
         maxFunctionDepth: Int = 100,
         maxLoopIterations: Int = 10_000,
-        maxCommandSubstitutionDepth: Int = 32
+        maxCommandSubstitutionDepth: Int = 32,
+        maxWallClockDuration: TimeInterval? = nil
     ) {
         self.maxCommandCount = maxCommandCount
         self.maxFunctionDepth = maxFunctionDepth
         self.maxLoopIterations = maxLoopIterations
         self.maxCommandSubstitutionDepth = maxCommandSubstitutionDepth
+        self.maxWallClockDuration = maxWallClockDuration
     }
 }
 

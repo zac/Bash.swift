@@ -706,7 +706,6 @@ struct SleepCommand: BuiltinCommand {
     static let overview = "Delay for a specified amount of time"
 
     static func run(context: inout CommandContext, options: Options) async -> Int32 {
-        _ = context
         guard !options.durations.isEmpty else {
             context.writeStderr("sleep: missing operand\n")
             return 1
@@ -723,8 +722,16 @@ struct SleepCommand: BuiltinCommand {
 
         let nanosDouble = max(0, totalSeconds) * 1_000_000_000
         let nanos = UInt64(min(nanosDouble, Double(UInt64.max)))
-        try? await Task.sleep(nanoseconds: nanos)
-        return 0
+        do {
+            try await Task.sleep(nanoseconds: nanos)
+            return 0
+        } catch {
+            if let failure = await context.executionControl?.checkpoint() {
+                context.writeStderr("\(failure.message)\n")
+                return failure.exitCode
+            }
+            return 130
+        }
     }
 
     private static func parseDuration(_ token: String) -> Double? {
@@ -829,34 +836,25 @@ struct TimeoutCommand: BuiltinCommand {
             case timedOut
         }
 
-        let baseContext = context
-        let timeoutNanos = UInt64(options.seconds * 1_000_000_000)
-        let outcome = await withTaskGroup(of: Outcome.self) { group in
-            group.addTask {
-                let sub = await baseContext.runSubcommandIsolated(options.command, stdin: baseContext.stdin)
-                return .completed(sub.result, sub.currentDirectory, sub.environment)
-            }
+        let sub = await context.runSubcommandIsolated(
+            options.command,
+            stdin: context.stdin,
+            wallClockTimeout: options.seconds
+        )
 
-            group.addTask {
-                try? await Task.sleep(nanoseconds: timeoutNanos)
-                return .timedOut
-            }
-
-            let first = await group.next() ?? .timedOut
-            group.cancelAll()
-            return first
-        }
-
-        switch outcome {
-        case let .completed(result, newDirectory, newEnvironment):
+        switch sub.result.exitCode {
+        case 124:
+            context.stderr.append(sub.result.stderr)
+            return 124
+        default:
+            let result = sub.result
+            let newDirectory = sub.currentDirectory
+            let newEnvironment = sub.environment
             context.currentDirectory = newDirectory
             context.environment = newEnvironment
             context.stdout.append(result.stdout)
             context.stderr.append(result.stderr)
             return result.exitCode
-        case .timedOut:
-            context.writeStderr("timeout: command timed out\n")
-            return 124
         }
     }
 }

@@ -241,10 +241,11 @@ public struct ExecutionLimits {
     public var maxFunctionDepth: Int
     public var maxLoopIterations: Int
     public var maxCommandSubstitutionDepth: Int
+    public var maxWallClockDuration: TimeInterval?
 }
 ```
 
-Each `run` executes under an `ExecutionLimits` budget. Exceeding a limit stops execution with exit code `2`. If `cancellationCheck` returns `true`, or the surrounding task is cancelled, execution stops with exit code `130`.
+Each `run` executes under an `ExecutionLimits` budget. Exceeding a structural limit stops execution with exit code `2`. If `maxWallClockDuration` is exceeded, execution stops with exit code `124`. If `cancellationCheck` returns `true`, or the surrounding task is cancelled, execution stops with exit code `130`. Wall-clock accounting excludes time spent waiting on host permission callbacks.
 
 ### `PermissionRequest` and `PermissionDecision`
 
@@ -564,7 +565,7 @@ All implemented commands support `--help`.
 | `seq` | `-s <separator>`, `-w`, positional numeric args |
 | `sleep` | positional durations (`NUMBER[SUFFIX]`, suffix: `s`, `m`, `h`, `d`) |
 | `time` | `time <command...>` |
-| `timeout` | `timeout <seconds> <command...>` |
+| `timeout` | `timeout <seconds> <command...>`; uses effective elapsed time and excludes host permission callback waits |
 | `true` | none |
 | `wait` | optional job specs (`wait`, `wait %1`) |
 | `whoami` | none |
