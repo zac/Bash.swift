@@ -21,12 +21,14 @@ enum SecretsTestSupport {
     }
 
     static func makeSecretAwareSession(
-        policy: SecretHandlingPolicy
+        policy: SecretHandlingPolicy,
+        networkPolicy: NetworkPolicy = .disabled
     ) async throws -> (session: BashSession, root: URL) {
         try await makeSession(
             options: SessionOptions(
                 filesystem: ReadWriteFilesystem(),
                 layout: .unixLike,
+                networkPolicy: networkPolicy,
                 secretPolicy: policy,
                 secretResolver: BashSecretsReferenceResolver()
             )

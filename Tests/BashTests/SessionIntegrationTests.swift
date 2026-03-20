@@ -1418,7 +1418,7 @@ struct SessionIntegrationTests {
 
     @Test("curl command basic data and file usage")
     func curlCommandBasicDataAndFileUsage() async throws {
-        let (session, root) = try await TestSupport.makeSession()
+        let (session, root) = try await TestSupport.makeSession(networkPolicy: .unrestricted)
         defer { TestSupport.removeDirectory(root) }
 
         let dataURL = await session.run("curl data:text/plain,hello%20world")
@@ -1550,6 +1550,7 @@ struct SessionIntegrationTests {
     func curlPermissionHandlerCanDenyOutboundHTTPRequests() async throws {
         let probe = PermissionProbe()
         let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
             permissionHandler: { request in
                 await probe.record(request)
                 return .deny(message: "network access denied")
@@ -1575,6 +1576,7 @@ struct SessionIntegrationTests {
     func curlPermissionHandlerAllowOnceDoesNotPersist() async throws {
         let probe = PermissionProbe()
         let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
             permissionHandler: { request in
                 await probe.record(request)
                 return .allow
@@ -1596,6 +1598,7 @@ struct SessionIntegrationTests {
     func curlPermissionHandlerCanAllowForSession() async throws {
         let probe = PermissionProbe()
         let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
             permissionHandler: { request in
                 await probe.record(request)
                 return .allowForSession
@@ -1617,6 +1620,7 @@ struct SessionIntegrationTests {
     func curlPermissionHandlerIsSkippedForNonHTTPURLs() async throws {
         let probe = PermissionProbe()
         let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: .unrestricted,
             permissionHandler: { request in
                 await probe.record(request)
                 return .deny(message: "network access denied")
@@ -1635,7 +1639,10 @@ struct SessionIntegrationTests {
     @Test("curl network policy can deny private ranges")
     func curlNetworkPolicyCanDenyPrivateRanges() async throws {
         let (session, root) = try await TestSupport.makeSession(
-            networkPolicy: NetworkPolicy(denyPrivateRanges: true)
+            networkPolicy: NetworkPolicy(
+                allowsHTTPRequests: true,
+                denyPrivateRanges: true
+            )
         )
         defer { TestSupport.removeDirectory(root) }
 
@@ -1648,6 +1655,7 @@ struct SessionIntegrationTests {
     func curlNetworkPolicyCanDenyURLsOutsideAllowlist() async throws {
         let (session, root) = try await TestSupport.makeSession(
             networkPolicy: NetworkPolicy(
+                allowsHTTPRequests: true,
                 allowedURLPrefixes: ["https://api.example.com/"]
             )
         )
@@ -1656,6 +1664,76 @@ struct SessionIntegrationTests {
         let result = await session.run("curl https://example.com")
         #expect(result.exitCode == 1)
         #expect(result.stderrString.contains("not in the network allowlist"))
+    }
+
+    @Test("curl blocks outbound http by default")
+    func curlBlocksOutboundHTTPByDefault() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl https://example.com")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("outbound HTTP(S) access is disabled"))
+    }
+
+    @Test("curl allowlist matches path boundaries instead of raw prefixes")
+    func curlAllowlistMatchesPathBoundariesInsteadOfRawPrefixes() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            networkPolicy: NetworkPolicy(
+                allowsHTTPRequests: true,
+                allowedURLPrefixes: ["https://api.example.com/v1"]
+            )
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("curl https://api.example.com/v10/status")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("not in the network allowlist"))
+    }
+
+    @Test("execution limits cap command count")
+    func executionLimitsCapCommandCount() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run(
+            "echo one; echo two",
+            options: RunOptions(
+                executionLimits: ExecutionLimits(maxCommandCount: 1)
+            )
+        )
+        #expect(result.exitCode == 2)
+        #expect(result.stderrString.contains("maximum command count"))
+    }
+
+    @Test("execution limits cap loop iterations")
+    func executionLimitsCapLoopIterations() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run(
+            "while true; do echo tick; done",
+            options: RunOptions(
+                executionLimits: ExecutionLimits(maxLoopIterations: 3)
+            )
+        )
+        #expect(result.exitCode == 2)
+        #expect(result.stderrString.contains("while: exceeded max iterations"))
+    }
+
+    @Test("execution can be cancelled with run option")
+    func executionCanBeCancelledWithRunOption() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run(
+            "while true; do echo tick; done",
+            options: RunOptions(
+                cancellationCheck: { true }
+            )
+        )
+        #expect(result.exitCode == 130)
+        #expect(result.stderrString.contains("execution cancelled"))
     }
 
     @Test("html-to-markdown command parity chunk")

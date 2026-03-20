@@ -5,6 +5,7 @@ public final actor BashSession {
     private let options: SessionOptions
     let jobManager: ShellJobManager
     private let permissionAuthorizer: PermissionAuthorizer
+    var executionControlStore: ExecutionControl?
 
     var currentDirectoryStore: String
     var environmentStore: [String: String]
@@ -44,8 +45,16 @@ public final actor BashSession {
         let usesTemporaryState = options.currentDirectory != nil
             || !options.environment.isEmpty
             || options.replaceEnvironment
+        let executionControl = ExecutionControl(
+            limits: options.executionLimits ?? self.options.executionLimits,
+            cancellationCheck: options.cancellationCheck
+        )
         guard usesTemporaryState else {
-            return await runPersistingState(commandLine, stdin: options.stdin)
+            return await runPersistingState(
+                commandLine,
+                stdin: options.stdin,
+                executionControl: executionControl
+            )
         }
 
         let savedCurrentDirectory = currentDirectoryStore
@@ -82,7 +91,11 @@ public final actor BashSession {
             environmentStore.merge(options.environment) { _, rhs in rhs }
         }
 
-        let result = await runPersistingState(commandLine, stdin: options.stdin)
+        let result = await runPersistingState(
+            commandLine,
+            stdin: options.stdin,
+            executionControl: executionControl
+        )
 
         currentDirectoryStore = savedCurrentDirectory
         environmentStore = savedEnvironment
@@ -90,10 +103,26 @@ public final actor BashSession {
         return result
     }
 
-    private func runPersistingState(_ commandLine: String, stdin: Data) async -> CommandResult {
+    private func runPersistingState(
+        _ commandLine: String,
+        stdin: Data,
+        executionControl: ExecutionControl
+    ) async -> CommandResult {
+        let savedExecutionControl = executionControlStore
+        executionControlStore = executionControl
+        defer { executionControlStore = savedExecutionControl }
+
         let trimmed = commandLine.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
+        }
+
+        if let failure = await executionControl.checkpoint() {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(failure.message)\n".utf8),
+                exitCode: failure.exitCode
+            )
         }
 
         historyStore.append(trimmed)
@@ -102,6 +131,13 @@ public final actor BashSession {
         }
 
         var substitution = await expandCommandSubstitutions(in: commandLine)
+        if let failure = substitution.failure {
+            return CommandResult(
+                stdout: Data(),
+                stderr: substitution.stderr,
+                exitCode: failure.exitCode
+            )
+        }
         if let error = substitution.error {
             var stderr = substitution.stderr
             stderr.append(Data("\(error)\n".utf8))
@@ -241,6 +277,7 @@ public final actor BashSession {
             networkPolicy: options.networkPolicy,
             handler: options.permissionHandler
         )
+        executionControlStore = nil
 
         commandRegistry = [:]
         shellFunctionStore = [:]
@@ -315,6 +352,7 @@ public final actor BashSession {
             enableGlobbing: options.enableGlobbing,
             jobControl: jobControl,
             permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControlStore,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,

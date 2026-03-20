@@ -224,10 +224,27 @@ public struct RunOptions {
     public var environment: [String: String]
     public var replaceEnvironment: Bool
     public var currentDirectory: String?
+    public var executionLimits: ExecutionLimits?
+    public var cancellationCheck: (@Sendable () -> Bool)?
 }
 ```
 
-Use `RunOptions` when you want a Cloudflare-style per-execution override without changing the session's persisted shell state. Filesystem mutations still persist; environment, working-directory, and function changes from that run do not.
+Use `RunOptions` when you want a Cloudflare-style per-execution override without changing the session's persisted shell state. Filesystem mutations still persist; environment, working-directory, and function changes from that run do not. You can also tighten execution budgets or provide a host cancellation probe for a single run.
+
+### `ExecutionLimits`
+
+```swift
+public struct ExecutionLimits {
+    public static let `default`: ExecutionLimits
+
+    public var maxCommandCount: Int
+    public var maxFunctionDepth: Int
+    public var maxLoopIterations: Int
+    public var maxCommandSubstitutionDepth: Int
+}
+```
+
+Each `run` executes under an `ExecutionLimits` budget. Exceeding a limit stops execution with exit code `2`. If `cancellationCheck` returns `true`, or the surrounding task is cancelled, execution stops with exit code `130`.
 
 ### `PermissionRequest` and `PermissionDecision`
 
@@ -257,15 +274,17 @@ public enum PermissionDecision {
 
 ```swift
 public struct NetworkPolicy {
+    public static let disabled: NetworkPolicy
     public static let unrestricted: NetworkPolicy
 
+    public var allowsHTTPRequests: Bool
     public var allowedHosts: [String]
     public var allowedURLPrefixes: [String]
     public var denyPrivateRanges: Bool
 }
 ```
 
-Use `allowedHosts` for host-based allowlists that should also apply to `git` remotes and Python socket connections. Use `allowedURLPrefixes` for URL-aware tools like `curl`/`wget`. When both are empty, the built-in policy is unrestricted.
+Outbound HTTP(S) is disabled by default. Use `.unrestricted` or set `allowsHTTPRequests: true` to opt in. `allowedHosts` fits host-level allowlisting that should also apply to `git` remotes and Python socket connections. `allowedURLPrefixes` is stricter and is matched with exact scheme/host/port plus path-boundary validation for URL-aware tools like `curl` and `wget`. When an allowlist is present, a request must match the host list or the URL-prefix list before any private-range DNS checks run.
 
 ### `SessionOptions`
 
@@ -277,6 +296,7 @@ public struct SessionOptions {
     public var enableGlobbing: Bool
     public var maxHistory: Int
     public var networkPolicy: NetworkPolicy
+    public var executionLimits: ExecutionLimits
     public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
@@ -290,19 +310,21 @@ Defaults:
 - `initialEnvironment`: `[:]`
 - `enableGlobbing`: `true`
 - `maxHistory`: `1000`
-- `networkPolicy`: `NetworkPolicy.unrestricted`
+- `networkPolicy`: `NetworkPolicy.disabled`
+- `executionLimits`: `ExecutionLimits.default`
 - `permissionHandler`: `nil`
 - `secretPolicy`: `.off`
 - `secretResolver`: `nil`
 - `secretOutputRedactor`: `DefaultSecretOutputRedactor()`
 
-Use `networkPolicy` for built-in outbound rules such as private-range blocking and allowlists. Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions after the built-in policy passes. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
+Use `networkPolicy` for built-in outbound rules such as default-off HTTP(S), private-range blocking, and allowlists. Use `executionLimits` to bound shell work at the session level. Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions after the built-in policy passes. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
 
 Example built-in policy plus callback:
 
 ```swift
 let options = SessionOptions(
     networkPolicy: NetworkPolicy(
+        allowsHTTPRequests: true,
         allowedHosts: ["api.example.com"],
         allowedURLPrefixes: ["https://api.example.com/v1/"],
         denyPrivateRanges: true
@@ -322,6 +344,8 @@ let options = SessionOptions(
 Available filesystem implementations:
 - `ReadWriteFilesystem`: root-jail wrapper over real disk I/O.
 - `InMemoryFilesystem`: fully in-memory filesystem with no disk writes.
+- `OverlayFilesystem`: snapshots an on-disk root into an in-memory overlay for the session; later writes stay in memory.
+- `MountableFilesystem`: composes multiple filesystems under virtual mount points like `/workspace` and `/docs`.
 - `SandboxFilesystem`: resolves app container-style roots (`documents`, `caches`, `temporary`, app group, custom URL).
 - `SecurityScopedFilesystem`: URL/bookmark-backed filesystem for security-scoped access.
 
@@ -347,7 +371,8 @@ Execution pipeline:
 
 Current hardening layers include:
 - Root-jail filesystem implementations plus null-byte path rejection.
-- Optional `NetworkPolicy` rules (`denyPrivateRanges`, host allowlists, URL-prefix allowlists) and the host `permissionHandler`.
+- Optional `NetworkPolicy` rules with default-off HTTP(S), `denyPrivateRanges`, host allowlists, URL-prefix allowlists, and the host `permissionHandler`.
+- Built-in execution budgets for command count, loop iterations, function depth, and command substitution depth, plus host-driven cancellation.
 - Strict `BashPython` shims that block process/FFI escape APIs like `subprocess`, `ctypes`, and `os.system`.
 - Secret-reference resolution/redaction policies that keep opaque references in model-visible flows by default.
 
@@ -382,6 +407,8 @@ Security-sensitive embeddings should still assume the host app owns the real tru
 Built-in filesystem options:
 - `ReadWriteFilesystem` (default): rooted at your `rootDirectory`; reads/writes hit disk in that sandboxed root.
 - `InMemoryFilesystem`: virtual tree stored in memory; no file mutations are written to disk.
+- `OverlayFilesystem`: imports an on-disk root into memory at session start; later writes stay in memory and do not modify the host root.
+- `MountableFilesystem`: routes different virtual path prefixes to different filesystem backends.
 - `SandboxFilesystem`: root resolved from container locations, then backed by `ReadWriteFilesystem`.
 - `SecurityScopedFilesystem`: root resolved from security-scoped URL or bookmark, then backed by `ReadWriteFilesystem`.
 
@@ -399,7 +426,7 @@ let inMemory = SessionOptions(filesystem: InMemoryFilesystem())
 let session = try await BashSession(options: inMemory)
 ```
 
-`BashSession.init(options:)` works with filesystems that can self-configure for a session (`SessionConfigurableFilesystem`), such as `InMemoryFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem`.
+`BashSession.init(options:)` works with filesystems that can self-configure for a session (`SessionConfigurableFilesystem`), such as `InMemoryFilesystem`, `OverlayFilesystem`, `MountableFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem`.
 
 You can provide a custom filesystem by implementing `ShellFilesystem`.
 
@@ -409,6 +436,8 @@ You can provide a custom filesystem by implementing `ShellFilesystem`.
 | --- | --- | --- | --- | --- |
 | `ReadWriteFilesystem` | supported | supported | supported | supported |
 | `InMemoryFilesystem` | supported | supported | supported | supported |
+| `OverlayFilesystem` | supported | supported | supported | supported |
+| `MountableFilesystem` | supported | supported | supported | supported |
 | `SandboxFilesystem` | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) |
 | `SecurityScopedFilesystem` | supported | supported | supported | compiles; throws `ShellError.unsupported` when configured |
 
@@ -550,7 +579,7 @@ All implemented commands support `--help`.
 | `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
 
 When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
-When `SessionOptions.networkPolicy` is set, `curl`/`wget`, `git clone` remotes, and `BashPython` socket connections enforce the same built-in allowlist/private-range rules.
+When `SessionOptions.networkPolicy` is set, `curl`/`wget`, `git clone` remotes, and `BashPython` socket connections enforce the same built-in default-off HTTP(S), allowlist, and private-range rules.
 When `SessionOptions.permissionHandler` is set, `curl` and `wget` ask it before outbound HTTP(S) requests, `git clone` asks it before remote clones, and `BashPython` asks it before socket connections. `data:` and jailed `file:` URLs do not trigger network checks.
 
 ## Command Behaviors and Notes

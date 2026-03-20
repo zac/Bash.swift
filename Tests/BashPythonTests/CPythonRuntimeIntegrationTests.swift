@@ -115,7 +115,10 @@ struct CPythonRuntimeIntegrationTests {
     @BashPythonTestActor
     func networkPolicyBlocksPrivateSocketTargets() async throws {
         let (session, root) = try await PythonTestSupport.makeSession(
-            networkPolicy: NetworkPolicy(denyPrivateRanges: true)
+            networkPolicy: NetworkPolicy(
+                allowsHTTPRequests: true,
+                denyPrivateRanges: true
+            )
         )
         defer { PythonTestSupport.removeDirectory(root) }
 
@@ -128,7 +131,10 @@ struct CPythonRuntimeIntegrationTests {
     @BashPythonTestActor
     func pythonNetworkChecksReuseHostCallbackAfterPolicyPasses() async throws {
         let (session, root) = try await PythonTestSupport.makeSession(
-            networkPolicy: NetworkPolicy(allowedHosts: ["1.1.1.1"]),
+            networkPolicy: NetworkPolicy(
+                allowsHTTPRequests: true,
+                allowedHosts: ["1.1.1.1"]
+            ),
             permissionHandler: { request in
                 switch request.kind {
                 case let .network(network):

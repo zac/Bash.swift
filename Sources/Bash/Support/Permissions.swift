@@ -31,17 +31,21 @@ public struct NetworkPermissionRequest: Sendable, Hashable {
 }
 
 public struct NetworkPolicy: Sendable {
-    public static let unrestricted = NetworkPolicy()
+    public static let disabled = NetworkPolicy()
+    public static let unrestricted = NetworkPolicy(allowsHTTPRequests: true)
 
+    public var allowsHTTPRequests: Bool
     public var allowedHosts: [String]
     public var allowedURLPrefixes: [String]
     public var denyPrivateRanges: Bool
 
     public init(
+        allowsHTTPRequests: Bool = false,
         allowedHosts: [String] = [],
         allowedURLPrefixes: [String] = [],
         denyPrivateRanges: Bool = false
     ) {
+        self.allowsHTTPRequests = allowsHTTPRequests
         self.allowedHosts = allowedHosts
         self.allowedURLPrefixes = allowedURLPrefixes
         self.denyPrivateRanges = denyPrivateRanges
@@ -70,7 +74,7 @@ actor PermissionAuthorizer: PermissionAuthorizing {
     private var sessionAllows: Set<PermissionRequest> = []
 
     init(
-        networkPolicy: NetworkPolicy = .unrestricted,
+        networkPolicy: NetworkPolicy = .disabled,
         handler: Handler? = nil
     ) {
         self.networkPolicy = networkPolicy
@@ -118,11 +122,26 @@ private enum PermissionPolicyEvaluator {
         for request: NetworkPermissionRequest,
         networkPolicy: NetworkPolicy
     ) -> String? {
-        guard networkPolicy.denyPrivateRanges || networkPolicy.hasAllowlist else {
-            return nil
+        guard networkPolicy.allowsHTTPRequests else {
+            return "network access denied by policy: outbound HTTP(S) access is disabled"
         }
 
         let host = parsedHost(from: request.url)
+
+        if networkPolicy.hasAllowlist {
+            let prefixAllowed = networkPolicy.allowedURLPrefixes.contains {
+                urlMatchesPrefix(request.url, allowedPrefix: $0)
+            }
+            let hostAllowed = if let host {
+                hostIsAllowed(host, allowedHosts: networkPolicy.allowedHosts)
+            } else {
+                false
+            }
+
+            guard prefixAllowed || hostAllowed else {
+                return "network access denied by policy: '\(request.url)' is not in the network allowlist"
+            }
+        }
 
         if networkPolicy.denyPrivateRanges,
            let host,
@@ -130,20 +149,7 @@ private enum PermissionPolicyEvaluator {
             return "network access denied by policy: private network host '\(host)'"
         }
 
-        guard networkPolicy.hasAllowlist else {
-            return nil
-        }
-
-        if networkPolicy.allowedURLPrefixes.contains(where: { request.url.hasPrefix($0) }) {
-            return nil
-        }
-
-        if let host,
-           hostIsAllowed(host, allowedHosts: networkPolicy.allowedHosts) {
-            return nil
-        }
-
-        return "network access denied by policy: '\(request.url)' is not in the network allowlist"
+        return nil
     }
 
     private static func parsedHost(from urlString: String) -> String? {
@@ -159,6 +165,67 @@ private enum PermissionPolicyEvaluator {
             }
         }
         return false
+    }
+
+    private static func urlMatchesPrefix(_ urlString: String, allowedPrefix: String) -> Bool {
+        guard
+            let request = URLComponents(string: urlString),
+            let allowed = URLComponents(string: allowedPrefix),
+            let requestScheme = request.scheme?.lowercased(),
+            let allowedScheme = allowed.scheme?.lowercased(),
+            let requestHost = request.host?.lowercased(),
+            let allowedHost = allowed.host?.lowercased()
+        else {
+            return false
+        }
+
+        guard requestScheme == allowedScheme, requestHost == allowedHost else {
+            return false
+        }
+
+        if effectivePort(for: request) != effectivePort(for: allowed) {
+            return false
+        }
+
+        let allowedPath = normalizedPrefixPath(allowed.path)
+        let requestPath = normalizedPrefixPath(request.path)
+        if allowedPath != "/", hasAmbiguousEncodedSeparator(in: request.percentEncodedPath) {
+            return false
+        }
+
+        if allowedPath == "/" {
+            return true
+        }
+
+        if allowedPath.hasSuffix("/") {
+            return requestPath.hasPrefix(allowedPath)
+        }
+
+        return requestPath == allowedPath || requestPath.hasPrefix(allowedPath + "/")
+    }
+
+    private static func normalizedPrefixPath(_ path: String) -> String {
+        path.isEmpty ? "/" : path
+    }
+
+    private static func effectivePort(for components: URLComponents) -> Int? {
+        if let port = components.port {
+            return port
+        }
+
+        switch components.scheme?.lowercased() {
+        case "http":
+            return 80
+        case "https":
+            return 443
+        default:
+            return nil
+        }
+    }
+
+    private static func hasAmbiguousEncodedSeparator(in percentEncodedPath: String) -> Bool {
+        let lower = percentEncodedPath.lowercased()
+        return lower.contains("%2f") || lower.contains("%5c")
     }
 
     private static func hostTargetsPrivateRange(_ host: String) -> Bool {

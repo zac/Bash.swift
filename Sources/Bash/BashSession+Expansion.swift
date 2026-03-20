@@ -5,6 +5,7 @@ extension BashSession {
         var commandLine: String
         var stderr: Data
         var error: ShellError?
+        var failure: ExecutionFailure?
     }
 
     struct PendingHereDocument {
@@ -18,6 +19,15 @@ extension BashSession {
     }
 
     func expandCommandSubstitutions(in commandLine: String) async -> CommandSubstitutionOutcome {
+        if let failure = await executionControlStore?.checkpoint() {
+            return CommandSubstitutionOutcome(
+                commandLine: "",
+                stderr: Data("\(failure.message)\n".utf8),
+                error: nil,
+                failure: failure
+            )
+        }
+
         var output = ""
         var stderr = Data()
         var quote: QuoteKind = .none
@@ -25,6 +35,15 @@ extension BashSession {
         var pendingHereDocuments: [PendingHereDocument] = []
 
         while index < commandLine.endIndex {
+            if let failure = await executionControlStore?.checkpoint() {
+                return CommandSubstitutionOutcome(
+                    commandLine: output,
+                    stderr: Data("\(failure.message)\n".utf8),
+                    error: nil,
+                    failure: failure
+                )
+            }
+
             let character = commandLine[index]
 
             if character == "\\", quote != .single {
@@ -140,17 +159,37 @@ extension BashSession {
         return CommandSubstitutionOutcome(
             commandLine: output,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
     private func evaluateCommandSubstitution(_ command: String) async -> CommandSubstitutionOutcome {
+        if let failure = await executionControlStore?.pushCommandSubstitution() {
+            return CommandSubstitutionOutcome(
+                commandLine: "",
+                stderr: Data("\(failure.message)\n".utf8),
+                error: nil,
+                failure: failure
+            )
+        }
+
         let nested = await expandCommandSubstitutions(in: command)
+        await executionControlStore?.popCommandSubstitution()
+        if let failure = nested.failure {
+            return CommandSubstitutionOutcome(
+                commandLine: "",
+                stderr: nested.stderr,
+                error: nil,
+                failure: failure
+            )
+        }
         if let error = nested.error {
             return CommandSubstitutionOutcome(
                 commandLine: "",
                 stderr: nested.stderr,
-                error: error
+                error: error,
+                failure: nil
             )
         }
 
@@ -161,13 +200,15 @@ extension BashSession {
             return CommandSubstitutionOutcome(
                 commandLine: "",
                 stderr: nested.stderr,
-                error: shellError
+                error: shellError,
+                failure: nil
             )
         } catch {
             return CommandSubstitutionOutcome(
                 commandLine: "",
                 stderr: nested.stderr,
-                error: .parserError("\(error)")
+                error: .parserError("\(error)"),
+                failure: nil
             )
         }
 
@@ -189,7 +230,8 @@ extension BashSession {
         return CommandSubstitutionOutcome(
             commandLine: replacement,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 

@@ -10,6 +10,7 @@ private struct TextExpansionOutcome: Sendable {
     var text: String
     var stderr: Data
     var error: ShellError?
+    var failure: ExecutionFailure?
 }
 
 enum ShellExecutor {
@@ -25,6 +26,7 @@ enum ShellExecutor {
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -46,6 +48,12 @@ enum ShellExecutor {
         var lastExitCode: Int32 = 0
 
         for segment in parsedLine.segments {
+            if let failure = await executionControl?.checkpoint() {
+                lastExitCode = failure.exitCode
+                aggregateErr.append(Data("\(failure.message)\n".utf8))
+                break
+            }
+
             if shouldSkipSegment(connector: segment.connector, previousExitCode: lastExitCode) {
                 continue
             }
@@ -81,6 +89,7 @@ enum ShellExecutor {
                             enableGlobbing: backgroundEnableGlobbing,
                             jobControl: nil,
                             permissionAuthorizer: permissionAuthorizer,
+                            executionControl: executionControl,
                             secretPolicy: backgroundSecretPolicy,
                             secretResolver: backgroundSecretResolver,
                             secretTracker: localTracker,
@@ -117,6 +126,7 @@ enum ShellExecutor {
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
                 permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -162,6 +172,7 @@ enum ShellExecutor {
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -184,6 +195,7 @@ enum ShellExecutor {
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
                 permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -212,11 +224,20 @@ enum ShellExecutor {
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
         secretOutputRedactor: any SecretOutputRedacting
     ) async -> CommandResult {
+        if let failure = await executionControl?.checkpoint() {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(failure.message)\n".utf8),
+                exitCode: failure.exitCode
+            )
+        }
+
         var input = stdin
         var stderr = Data()
 
@@ -232,12 +253,16 @@ enum ShellExecutor {
                     shellFunctions: shellFunctions,
                     enableGlobbing: enableGlobbing,
                     permissionAuthorizer: permissionAuthorizer,
+                    executionControl: executionControl,
                     secretPolicy: secretPolicy,
                     secretResolver: secretResolver,
                     secretTracker: secretTracker,
                     secretOutputRedactor: secretOutputRedactor
                 )
                 stderr.append(expandedHereDocument.stderr)
+                if let failure = expandedHereDocument.failure {
+                    return CommandResult(stdout: Data(), stderr: stderr, exitCode: failure.exitCode)
+                }
                 if let error = expandedHereDocument.error {
                     stderr.append(Data("\(error)\n".utf8))
                     return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
@@ -284,6 +309,14 @@ enum ShellExecutor {
         } else if commandName == "local" {
             result = executeLocalBuiltin(commandArgs, environment: &environment)
         } else if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
+            if let failure = await executionControl?.recordCommandExecution(commandName: commandName) {
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("\(failure.message)\n".utf8),
+                    exitCode: failure.exitCode
+                )
+            }
+
             var context = CommandContext(
                 commandName: commandName,
                 arguments: commandArgs,
@@ -299,7 +332,8 @@ enum ShellExecutor {
                 stdin: input,
                 secretTracker: secretTracker,
                 jobControl: jobControl,
-                permissionAuthorizer: permissionAuthorizer
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl
             )
 
             let exitCode = await implementation.runCommand(&context, commandArgs)
@@ -324,6 +358,7 @@ enum ShellExecutor {
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
                 permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -450,6 +485,7 @@ enum ShellExecutor {
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -463,6 +499,14 @@ enum ShellExecutor {
                 stdout: Data(),
                 stderr: Data("\(error)\n".utf8),
                 exitCode: 2
+            )
+        }
+
+        if let failure = await executionControl?.pushFunction() {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(failure.message)\n".utf8),
+                exitCode: failure.exitCode
             )
         }
 
@@ -488,6 +532,7 @@ enum ShellExecutor {
             enableGlobbing: enableGlobbing,
             jobControl: jobControl,
             permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -511,6 +556,8 @@ enum ShellExecutor {
         } else {
             environment[functionDepthKey] = String(previousDepth)
         }
+
+        await executionControl?.popFunction()
 
         return execution.result
     }
@@ -923,6 +970,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -932,7 +980,8 @@ enum ShellExecutor {
             return TextExpansionOutcome(
                 text: hereDocument.body,
                 stderr: Data(),
-                error: nil
+                error: nil,
+                failure: nil
             )
         }
 
@@ -946,6 +995,7 @@ enum ShellExecutor {
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
             permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -963,6 +1013,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -988,6 +1039,15 @@ enum ShellExecutor {
         }
 
         while index < text.endIndex {
+            if let failure = await executionControl?.checkpoint() {
+                return TextExpansionOutcome(
+                    text: output,
+                    stderr: Data("\(failure.message)\n".utf8),
+                    error: nil,
+                    failure: failure
+                )
+            }
+
             let character = text[index]
 
             if character == "\\" {
@@ -1047,6 +1107,7 @@ enum ShellExecutor {
                         shellFunctions: shellFunctions,
                         enableGlobbing: enableGlobbing,
                         permissionAuthorizer: permissionAuthorizer,
+                        executionControl: executionControl,
                         secretPolicy: secretPolicy,
                         secretResolver: secretResolver,
                         secretTracker: secretTracker,
@@ -1058,7 +1119,16 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: error
+                            error: error,
+                            failure: nil
+                        )
+                    }
+                    if let failure = evaluated.failure {
+                        return TextExpansionOutcome(
+                            text: output,
+                            stderr: stderr,
+                            error: nil,
+                            failure: failure
                         )
                     }
                     index = capture.endIndex
@@ -1067,13 +1137,15 @@ enum ShellExecutor {
                     return TextExpansionOutcome(
                         text: output,
                         stderr: stderr,
-                        error: shellError
+                        error: shellError,
+                        failure: nil
                     )
                 } catch {
                     return TextExpansionOutcome(
                         text: output,
                         stderr: stderr,
-                        error: .parserError("\(error)")
+                        error: .parserError("\(error)"),
+                        failure: nil
                     )
                 }
             }
@@ -1130,7 +1202,8 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: output,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
@@ -1144,6 +1217,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -1156,6 +1230,15 @@ enum ShellExecutor {
         var pendingHereDocuments: [PendingHereDocumentCapture] = []
 
         while index < commandLine.endIndex {
+            if let failure = await executionControl?.checkpoint() {
+                return TextExpansionOutcome(
+                    text: output,
+                    stderr: Data("\(failure.message)\n".utf8),
+                    error: nil,
+                    failure: failure
+                )
+            }
+
             let character = commandLine[index]
 
             if character == "\\", quote != .single {
@@ -1216,13 +1299,15 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: shellError
+                            error: shellError,
+                            failure: nil
                         )
                     } catch {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: .parserError("\(error)")
+                            error: .parserError("\(error)"),
+                            failure: nil
                         )
                     }
                 }
@@ -1250,6 +1335,7 @@ enum ShellExecutor {
                             shellFunctions: shellFunctions,
                             enableGlobbing: enableGlobbing,
                             permissionAuthorizer: permissionAuthorizer,
+                            executionControl: executionControl,
                             secretPolicy: secretPolicy,
                             secretResolver: secretResolver,
                             secretTracker: secretTracker,
@@ -1261,7 +1347,16 @@ enum ShellExecutor {
                             return TextExpansionOutcome(
                                 text: output,
                                 stderr: stderr,
-                                error: error
+                                error: error,
+                                failure: nil
+                            )
+                        }
+                        if let failure = evaluated.failure {
+                            return TextExpansionOutcome(
+                                text: output,
+                                stderr: stderr,
+                                error: nil,
+                                failure: failure
                             )
                         }
                         index = capture.endIndex
@@ -1270,13 +1365,15 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: shellError
+                            error: shellError,
+                            failure: nil
                         )
                     } catch {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: .parserError("\(error)")
+                            error: .parserError("\(error)"),
+                            failure: nil
                         )
                     }
                 }
@@ -1289,7 +1386,8 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: output,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
@@ -1303,11 +1401,21 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         permissionAuthorizer: any PermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
         secretOutputRedactor: any SecretOutputRedacting
     ) async -> TextExpansionOutcome {
+        if let failure = await executionControl?.pushCommandSubstitution() {
+            return TextExpansionOutcome(
+                text: "",
+                stderr: Data("\(failure.message)\n".utf8),
+                error: nil,
+                failure: failure
+            )
+        }
+
         let nested = await expandCommandSubstitutionsInCommandText(
             command,
             filesystem: filesystem,
@@ -1318,11 +1426,21 @@ enum ShellExecutor {
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
             permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
             secretOutputRedactor: secretOutputRedactor
         )
+        await executionControl?.popCommandSubstitution()
+        if let failure = nested.failure {
+            return TextExpansionOutcome(
+                text: "",
+                stderr: nested.stderr,
+                error: nil,
+                failure: failure
+            )
+        }
         if nested.error != nil {
             return nested
         }
@@ -1334,13 +1452,15 @@ enum ShellExecutor {
             return TextExpansionOutcome(
                 text: "",
                 stderr: nested.stderr,
-                error: shellError
+                error: shellError,
+                failure: nil
             )
         } catch {
             return TextExpansionOutcome(
                 text: "",
                 stderr: nested.stderr,
-                error: .parserError("\(error)")
+                error: .parserError("\(error)"),
+                failure: nil
             )
         }
 
@@ -1356,6 +1476,7 @@ enum ShellExecutor {
             enableGlobbing: enableGlobbing,
             jobControl: nil,
             permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -1368,7 +1489,8 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: trimmingTrailingNewlines(from: execution.result.stdoutString),
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 

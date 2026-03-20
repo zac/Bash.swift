@@ -20,6 +20,7 @@ public struct CommandContext: Sendable {
     let secretTracker: SecretExposureTracker?
     let jobControl: (any ShellJobControlling)?
     let permissionAuthorizer: any PermissionAuthorizing
+    let executionControl: ExecutionControl?
 
     public init(
         commandName: String,
@@ -54,7 +55,8 @@ public struct CommandContext: Sendable {
             stderr: stderr,
             secretTracker: nil,
             jobControl: nil,
-            permissionAuthorizer: PermissionAuthorizer()
+            permissionAuthorizer: PermissionAuthorizer(),
+            executionControl: nil
         )
     }
 
@@ -75,7 +77,8 @@ public struct CommandContext: Sendable {
         stderr: Data = Data(),
         secretTracker: SecretExposureTracker?,
         jobControl: (any ShellJobControlling)? = nil,
-        permissionAuthorizer: any PermissionAuthorizing = PermissionAuthorizer()
+        permissionAuthorizer: any PermissionAuthorizing = PermissionAuthorizer(),
+        executionControl: ExecutionControl? = nil
     ) {
         self.commandName = commandName
         self.arguments = arguments
@@ -94,6 +97,7 @@ public struct CommandContext: Sendable {
         self.secretTracker = secretTracker
         self.jobControl = jobControl
         self.permissionAuthorizer = permissionAuthorizer
+        self.executionControl = executionControl
     }
 
     public mutating func writeStdout(_ string: String) {
@@ -222,6 +226,18 @@ public struct CommandContext: Sendable {
         }
 
         let commandArgs = Array(argv.dropFirst())
+        if let failure = await executionControl?.recordCommandExecution(commandName: commandName) {
+            return (
+                CommandResult(
+                    stdout: Data(),
+                    stderr: Data("\(failure.message)\n".utf8),
+                    exitCode: failure.exitCode
+                ),
+                currentDirectory,
+                environment
+            )
+        }
+
         var childContext = CommandContext(
             commandName: commandName,
             arguments: commandArgs,
@@ -237,7 +253,8 @@ public struct CommandContext: Sendable {
             stdin: stdin ?? self.stdin,
             secretTracker: secretTracker,
             jobControl: jobControl,
-            permissionAuthorizer: permissionAuthorizer
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl
         )
 
         let exitCode = await implementation.runCommand(&childContext, commandArgs)

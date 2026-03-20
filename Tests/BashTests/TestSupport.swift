@@ -13,7 +13,7 @@ enum TestSupport {
         filesystem: (any ShellFilesystem)? = nil,
         layout: SessionLayout = .unixLike,
         enableGlobbing: Bool = true,
-        networkPolicy: NetworkPolicy = .unrestricted,
+        networkPolicy: NetworkPolicy = .disabled,
         permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
     ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
@@ -24,6 +24,7 @@ enum TestSupport {
             enableGlobbing: enableGlobbing,
             maxHistory: 1_000,
             networkPolicy: networkPolicy,
+            executionLimits: .default,
             permissionHandler: permissionHandler
         )
 

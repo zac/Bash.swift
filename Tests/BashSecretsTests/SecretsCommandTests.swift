@@ -400,7 +400,10 @@ struct SecretsCommandTests {
 
     @Test("curl resolves secret refs and redacts verbose output")
     func curlResolvesSecretRefsAndRedactsVerboseOutput() async throws {
-        let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(policy: .resolveAndRedact)
+        let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(
+            policy: .resolveAndRedact,
+            networkPolicy: .unrestricted
+        )
         defer { SecretsTestSupport.removeDirectory(root) }
 
         let secretValue = "curl-secret-\(UUID().uuidString)"

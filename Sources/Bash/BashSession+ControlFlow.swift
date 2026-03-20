@@ -96,7 +96,16 @@ extension BashSession {
 
             switch loop.kind {
             case let .list(variableName, values):
-                for value in values {
+                for (offset, value) in values.enumerated() {
+                    if let failure = await executionControlStore?.recordLoopIteration(
+                        loopName: "for",
+                        iteration: offset + 1
+                    ) {
+                        combinedErr.append(Data("\(failure.message)\n".utf8))
+                        lastExitCode = failure.exitCode
+                        break
+                    }
+
                     environmentStore[variableName] = value
                     let execution = await executeParsedLine(
                         parsedLine: parsedBody,
@@ -125,9 +134,12 @@ extension BashSession {
                 var iterations = 0
                 while true {
                     iterations += 1
-                    if iterations > 10_000 {
-                        combinedErr.append(Data("for: exceeded max iterations\n".utf8))
-                        lastExitCode = 2
+                    if let failure = await executionControlStore?.recordLoopIteration(
+                        loopName: "for",
+                        iteration: iterations
+                    ) {
+                        combinedErr.append(Data("\(failure.message)\n".utf8))
+                        lastExitCode = failure.exitCode
                         break
                     }
 
@@ -541,10 +553,13 @@ extension BashSession {
             var iterations = 0
             while true {
                 iterations += 1
-                if iterations > 10_000 {
-                    let loopName = loop.isUntil ? "until" : "while"
-                    combinedErr.append(Data("\(loopName): exceeded max iterations\n".utf8))
-                    lastExitCode = 2
+                let loopName = loop.isUntil ? "until" : "while"
+                if let failure = await executionControlStore?.recordLoopIteration(
+                    loopName: loopName,
+                    iteration: iterations
+                ) {
+                    combinedErr.append(Data("\(failure.message)\n".utf8))
+                    lastExitCode = failure.exitCode
                     break
                 }
 
