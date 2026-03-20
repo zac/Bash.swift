@@ -6,6 +6,8 @@ Repository: [github.com/velos/Bash.swift](https://github.com/velos/Bash.swift)
 
 You create a `BashSession`, run shell command strings, and get structured `stdout` / `stderr` / `exitCode` results. Commands mutate a real directory on disk through a sandboxed, root-jail filesystem abstraction.
 
+Like `just-bash`, `Bash.swift` should be treated as beta software and used at your own risk. The library is practical for app and agent workflows, but it is still evolving and should not be treated as a hardened isolation boundary or a drop-in replacement for a real system shell.
+
 ## Development Process
 
 Development of `Bash.swift` was approached very similarly to [just-bash](https://github.com/vercel-labs/just-bash). All output was with GPT-5.3-Codex Extra High thinking, initiated by an interactively built plan, executed by the model after the plan was finalized.
