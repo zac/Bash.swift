@@ -185,7 +185,6 @@ struct ParserAndFilesystemTests {
     @Test("filesystems reject paths with null bytes")
     func filesystemsRejectPathsWithNullBytes() async throws {
         let inMemory = InMemoryFilesystem()
-        try inMemory.configureForSession()
 
         do {
             _ = try await inMemory.readFile(path: "/bad\u{0}name")

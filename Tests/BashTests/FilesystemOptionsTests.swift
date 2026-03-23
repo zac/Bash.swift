@@ -24,6 +24,31 @@ struct FilesystemOptionsTests {
         #expect(ls.stdoutString.contains("rootless.txt"))
     }
 
+    @Test("bash reexports workspace filesystem shims")
+    func bashReexportsWorkspaceFilesystemShims() async throws {
+        let workspaceFilesystem: any WorkspaceFilesystem = InMemoryFilesystem()
+        let shellFilesystem: any ShellFilesystem = workspaceFilesystem
+        let inMemoryFilesystem = InMemoryFilesystem()
+        try await inMemoryFilesystem.writeFile(path: "/note.txt", data: Data("shim".utf8), append: false)
+        inMemoryFilesystem.reset()
+
+        let info = FileInfo(
+            path: "/note.txt",
+            isDirectory: false,
+            isSymbolicLink: false,
+            size: 4,
+            permissions: 0o644,
+            modificationDate: nil
+        )
+        let entry = DirectoryEntry(name: "note.txt", info: info)
+        let error = WorkspaceError.unsupported("shim check")
+
+        #expect(await shellFilesystem.exists(path: "/"))
+        #expect(!(await inMemoryFilesystem.exists(path: "/note.txt")))
+        #expect(entry.info.path == "/note.txt")
+        #expect(error.description.contains("shim check"))
+    }
+
     @Test("overlay filesystem snapshots disk and keeps writes in memory")
     func overlayFilesystemSnapshotsDiskAndKeepsWritesInMemory() async throws {
         let root = try TestSupport.makeTempDirectory(prefix: "BashOverlay")
@@ -100,8 +125,8 @@ struct FilesystemOptionsTests {
         #expect(!FileManager.default.fileExists(atPath: workspaceRoot.appendingPathComponent("guide.txt").path))
     }
 
-    @Test("rootless session init rejects non-configurable filesystem")
-    func rootlessSessionInitRejectsNonConfigurableFilesystem() async {
+    @Test("rootless session init rejects unconfigured read-write filesystem")
+    func rootlessSessionInitRejectsUnconfiguredReadWriteFilesystem() async {
         do {
             _ = try await BashSession(
                 options: SessionOptions(
@@ -113,8 +138,8 @@ struct FilesystemOptionsTests {
                 )
             )
             Issue.record("expected unsupported error")
-        } catch let error as ShellError {
-            #expect(error.description.contains("filesystem requires rootDirectory initializer"))
+        } catch let error as WorkspaceError {
+            #expect(error.description.contains("filesystem is not configured"))
         } catch {
             Issue.record("unexpected error: \(error)")
         }
@@ -145,22 +170,19 @@ struct FilesystemOptionsTests {
 
     @Test("sandbox documents and caches roots configure")
     func sandboxDocumentsAndCachesRootsConfigure() async throws {
-        let documents = SandboxFilesystem(root: .documents)
-        try documents.configureForSession()
+        let documents = try SandboxFilesystem(root: .documents)
         #expect(await documents.exists(path: "/"))
 
-        let caches = SandboxFilesystem(root: .caches)
-        try caches.configureForSession()
+        let caches = try SandboxFilesystem(root: .caches)
         #expect(await caches.exists(path: "/"))
     }
 
     @Test("sandbox app group invalid id throws unsupported")
     func sandboxAppGroupInvalidIDThrowsUnsupported() {
-        let fs = SandboxFilesystem(root: .appGroup("invalid.group.\(UUID().uuidString)"))
         do {
-            try fs.configureForSession()
+            _ = try SandboxFilesystem(root: .appGroup("invalid.group.\(UUID().uuidString)"))
             Issue.record("expected unsupported error")
-        } catch let error as ShellError {
+        } catch let error as WorkspaceError {
             #expect(error.description.contains("app group"))
         } catch {
             Issue.record("unexpected error: \(error)")
@@ -188,12 +210,11 @@ struct FilesystemOptionsTests {
     @Test("security-scoped filesystem unsupported on tvOS/watchOS")
     func securityScopedFilesystemUnsupportedOnUnsupportedPlatforms() throws {
         let tempURL = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-        let fs = try SecurityScopedFilesystem(url: tempURL)
 
         do {
-            try fs.configureForSession()
+            _ = try SecurityScopedFilesystem(url: tempURL)
             Issue.record("expected unsupported error")
-        } catch let error as ShellError {
+        } catch let error as WorkspaceError {
             #expect(error.description.contains("security-scoped URLs not supported"))
         } catch {
             Issue.record("unexpected error: \(error)")
@@ -206,7 +227,6 @@ struct FilesystemOptionsTests {
         defer { TestSupport.removeDirectory(root) }
 
         let readWriteFS = try SecurityScopedFilesystem(url: root, mode: .readWrite)
-        try readWriteFS.configureForSession()
         try await readWriteFS.writeFile(path: "/note.txt", data: Data("hello".utf8), append: false)
 
         let bookmarkData = try readWriteFS.makeBookmarkData()
@@ -219,17 +239,15 @@ struct FilesystemOptionsTests {
         try await readWriteFS.saveBookmark(id: bookmarkID, store: store)
 
         let restored = try await SecurityScopedFilesystem.loadBookmark(id: bookmarkID, store: store, mode: .readWrite)
-        try restored.configureForSession()
         let data = try await restored.readFile(path: "/note.txt")
         #expect(String(decoding: data, as: UTF8.self) == "hello")
 
         let readOnly = try SecurityScopedFilesystem(bookmarkData: bookmarkData, mode: .readOnly)
-        try readOnly.configureForSession()
 
         do {
             try await readOnly.writeFile(path: "/blocked.txt", data: Data("x".utf8), append: false)
             Issue.record("expected read-only rejection")
-        } catch let error as ShellError {
+        } catch let error as WorkspaceError {
             #expect(error.description.contains("filesystem is read-only"))
         } catch {
             Issue.record("unexpected error: \(error)")

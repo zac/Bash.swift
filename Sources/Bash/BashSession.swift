@@ -1,4 +1,5 @@
 import Foundation
+import Workspace
 
 public final actor BashSession {
     let filesystemStore: any ShellFilesystem
@@ -29,11 +30,6 @@ public final actor BashSession {
 
     public init(options: SessionOptions = .init()) async throws {
         let filesystem = options.filesystem
-        guard let configurable = filesystem as? any SessionConfigurableFilesystem else {
-            throw ShellError.unsupported("filesystem requires rootDirectory initializer")
-        }
-
-        try configurable.configureForSession()
         try await self.init(options: options, configuredFilesystem: filesystem)
     }
 

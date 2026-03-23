@@ -18,6 +18,7 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 - [Installation](#installation)
 - [Platform Support](#platform-support)
 - [Quick Start](#quick-start)
+- [Workspace Modules](#workspace-modules)
 - [Public API](#public-api)
 - [How It Works](#how-it-works)
 - [Security](#security)
@@ -51,6 +52,8 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
     )
 ]
 ```
+
+The reusable shell-agnostic workspace layer now lives in a separate `Workspace` package/repository. `Bash.swift` depends on that package, but it is no longer shipped as part of this repo.
 
 `BashSQLite`, `BashPython`, `BashGit`, and `BashSecrets` are optional products. Add them only if needed:
 
@@ -189,6 +192,35 @@ Policies:
 - `.resolveAndRedact`: resolve refs (where supported) and redact/replace secrets in output
 - `.strict`: like `.resolveAndRedact`, plus blocks high-risk flows like `secrets get --reveal`
 
+## Workspace Modules
+
+`Bash` now sits on top of reusable workspace primitives provided by a separate `Workspace` package:
+
+- `Workspace`: a typed agent-facing API plus the shell-agnostic filesystem abstractions, jailed/rooted filesystem implementations, overlays, mounts, bookmarks, path helpers, and filesystem permission wrappers it is built on.
+
+Import `Workspace` from that package directly when you want workspace tooling without shell parsing or command execution:
+
+```swift
+import Workspace
+
+let filesystem = PermissionedWorkspaceFilesystem(
+    base: try OverlayFilesystem(rootDirectory: workspaceRoot),
+    authorizer: WorkspacePermissionAuthorizer { request in
+        switch request.operation {
+        case .readFile, .listDirectory, .stat:
+            return .allowForSession
+        default:
+            return .deny(message: "write access denied")
+        }
+    }
+)
+
+let workspace = Workspace(filesystem: filesystem)
+let tree = try await workspace.summarizeTree("/workspace", maxDepth: 2)
+```
+
+`replaceInFiles` and `applyEdits` support dry runs plus best-effort rollback on failure. That rollback is logical state restoration within the provided filesystem, not an OS-level atomic transaction and not crash-safe across processes.
+
 ## Public API
 
 ### `BashSession`
@@ -255,6 +287,7 @@ Each `run` executes under an `ExecutionLimits` budget. Exceeding a structural li
 public struct PermissionRequest {
     public enum Kind {
         case network(NetworkPermissionRequest)
+        case filesystem(FilesystemPermissionRequest)
     }
 
     public var command: String
@@ -264,6 +297,33 @@ public struct PermissionRequest {
 public struct NetworkPermissionRequest {
     public var url: String
     public var method: String
+}
+
+public enum FilesystemPermissionOperation: String {
+    case stat
+    case listDirectory
+    case readFile
+    case writeFile
+    case createDirectory
+    case remove
+    case move
+    case copy
+    case createSymlink
+    case createHardLink
+    case readSymlink
+    case setPermissions
+    case resolveRealPath
+    case exists
+    case glob
+}
+
+public struct FilesystemPermissionRequest {
+    public var operation: FilesystemPermissionOperation
+    public var path: String?
+    public var sourcePath: String?
+    public var destinationPath: String?
+    public var append: Bool
+    public var recursive: Bool
 }
 
 public enum PermissionDecision {
@@ -320,7 +380,7 @@ Defaults:
 - `secretResolver`: `nil`
 - `secretOutputRedactor`: `DefaultSecretOutputRedactor()`
 
-Use `networkPolicy` for built-in outbound rules such as default-off HTTP(S), private-range blocking, and allowlists. Use `executionLimits` to bound shell work at the session level. Use `permissionHandler` when the host app or agent needs explicit control over outbound permissions after the built-in policy passes. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
+Use `networkPolicy` for built-in outbound rules such as default-off HTTP(S), private-range blocking, and allowlists. Use `executionLimits` to bound shell work at the session level. Use `permissionHandler` when the host app or agent needs explicit control over filesystem and outbound network access after the built-in policy passes. Returning `.allow` grants the current request once, `.allowForSession` caches an exact-match request for the life of that `BashSession`, and `.deny(message:)` blocks it with a user-visible error. If you want broader or persistent memory across sessions, keep that policy in the host and decide what to return from the callback.
 
 Example built-in policy plus callback:
 
@@ -339,6 +399,13 @@ let options = SessionOptions(
                 return .allowForSession
             }
             return .deny(message: "network access denied")
+        case let .filesystem(filesystem):
+            switch filesystem.operation {
+            case .readFile, .listDirectory, .stat:
+                return .allowForSession
+            default:
+                return .deny(message: "filesystem access denied")
+            }
         }
     }
 )
@@ -351,6 +418,8 @@ Available filesystem implementations:
 - `MountableFilesystem`: composes multiple filesystems under virtual mount points like `/workspace` and `/docs`.
 - `SandboxFilesystem`: resolves app container-style roots (`documents`, `caches`, `temporary`, app group, custom URL).
 - `SecurityScopedFilesystem`: URL/bookmark-backed filesystem for security-scoped access.
+
+For non-shell agent tooling, `Workspace` exposes the same filesystem stack under shell-agnostic names like `WorkspaceFilesystem`, `WorkspacePath`, `WorkspaceError`, and `PermissionedWorkspaceFilesystem`, along with the higher-level `Workspace` actor for typed tree traversal and batch editing helpers. A single `Workspace` can also sit on top of a `MountableFilesystem`, so isolated roots plus a shared `/memory` mount are already possible through the current interfaces.
 
 ### `SessionLayout`
 
@@ -374,6 +443,7 @@ Execution pipeline:
 
 Current hardening layers include:
 - Root-jail filesystem implementations plus null-byte path rejection.
+- Reusable workspace-level permission wrappers (`PermissionedWorkspaceFilesystem`) that can gate reads, writes, moves, copies, symlinks, and metadata operations before they hit the underlying filesystem.
 - Optional `NetworkPolicy` rules with default-off HTTP(S), `denyPrivateRanges`, host allowlists, URL-prefix allowlists, and the host `permissionHandler`.
 - Built-in execution budgets for command count, loop iterations, function depth, and command substitution depth, plus host-driven cancellation.
 - Strict `BashPython` shims that block process/FFI escape APIs like `subprocess`, `ctypes`, and `os.system`.
@@ -429,9 +499,11 @@ let inMemory = SessionOptions(filesystem: InMemoryFilesystem())
 let session = try await BashSession(options: inMemory)
 ```
 
-`BashSession.init(options:)` works with filesystems that can self-configure for a session (`SessionConfigurableFilesystem`), such as `InMemoryFilesystem`, `OverlayFilesystem`, `MountableFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem`.
+`BashSession.init(options:)` uses the filesystem exactly as provided. Pass a ready-to-use filesystem instance. `InMemoryFilesystem` works immediately; root-backed filesystems should be constructed or configured with their root before being passed in.
 
 You can provide a custom filesystem by implementing `ShellFilesystem`.
+
+If you do not need shell semantics, use `WorkspaceFilesystem` and the higher-level `Workspace` actor directly. The underlying jail, overlay, mount, bookmark, and permission concepts are shared; the shell layer is optional.
 
 ### Filesystem Platform Matrix
 
@@ -451,7 +523,6 @@ let store = UserDefaultsBookmarkStore()
 
 // Create from a URL chosen by your app's document flow.
 let fs = try SecurityScopedFilesystem(url: pickedURL, mode: .readWrite)
-try fs.configureForSession()
 try await fs.saveBookmark(id: "workspace", store: store)
 
 // Restore on a later app launch.
@@ -583,7 +654,7 @@ All implemented commands support `--help`.
 
 When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
 When `SessionOptions.networkPolicy` is set, `curl`/`wget`, `git clone` remotes, and `BashPython` socket connections enforce the same built-in default-off HTTP(S), allowlist, and private-range rules.
-When `SessionOptions.permissionHandler` is set, `curl` and `wget` ask it before outbound HTTP(S) requests, `git clone` asks it before remote clones, and `BashPython` asks it before socket connections. `data:` and jailed `file:` URLs do not trigger network checks.
+When `SessionOptions.permissionHandler` is set, shell filesystem operations and redirections ask it before reading or mutating files, `curl` and `wget` ask it before outbound HTTP(S) requests, `git clone` asks it before remote clones, and `BashPython` asks it before socket connections. Permission callback wait time is excluded from both `timeout` and run-level wall-clock budgets. `data:` and jailed `file:` URLs do not trigger network checks.
 
 ## Command Behaviors and Notes
 

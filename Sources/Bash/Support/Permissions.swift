@@ -9,6 +9,7 @@ import Glibc
 public struct PermissionRequest: Sendable, Hashable {
     public enum Kind: Sendable, Hashable {
         case network(NetworkPermissionRequest)
+        case filesystem(FilesystemPermissionRequest)
     }
 
     public var command: String
@@ -27,6 +28,49 @@ public struct NetworkPermissionRequest: Sendable, Hashable {
     public init(url: String, method: String) {
         self.url = url
         self.method = method
+    }
+}
+
+public enum FilesystemPermissionOperation: String, Sendable, Hashable {
+    case stat
+    case listDirectory
+    case readFile
+    case writeFile
+    case createDirectory
+    case remove
+    case move
+    case copy
+    case createSymlink
+    case createHardLink
+    case readSymlink
+    case setPermissions
+    case resolveRealPath
+    case exists
+    case glob
+}
+
+public struct FilesystemPermissionRequest: Sendable, Hashable {
+    public var operation: FilesystemPermissionOperation
+    public var path: String?
+    public var sourcePath: String?
+    public var destinationPath: String?
+    public var append: Bool
+    public var recursive: Bool
+
+    public init(
+        operation: FilesystemPermissionOperation,
+        path: String? = nil,
+        sourcePath: String? = nil,
+        destinationPath: String? = nil,
+        append: Bool = false,
+        recursive: Bool = false
+    ) {
+        self.operation = operation
+        self.path = path
+        self.sourcePath = sourcePath
+        self.destinationPath = destinationPath
+        self.append = append
+        self.recursive = recursive
     }
 }
 
@@ -144,6 +188,28 @@ actor PermissionAuthorizer: PermissionAuthorizing {
     }
 }
 
+func authorizePermissionRequest(
+    _ request: PermissionRequest,
+    using authorizer: any PermissionAuthorizing,
+    pausing executionControl: ExecutionControl?
+) async -> PermissionDecision {
+    if let authorizer = authorizer as? PermissionAuthorizer {
+        return await authorizer.authorize(request, pausing: executionControl)
+    }
+
+    if let executionControl {
+        await executionControl.beginPermissionPause()
+    }
+
+    let decision = await authorizer.authorize(request)
+
+    if let executionControl {
+        await executionControl.endPermissionPause()
+    }
+
+    return decision
+}
+
 private enum PermissionPolicyEvaluator {
     static func denialMessage(
         for request: PermissionRequest,
@@ -152,6 +218,8 @@ private enum PermissionPolicyEvaluator {
         switch request.kind {
         case let .network(networkRequest):
             denialMessage(for: networkRequest, networkPolicy: networkPolicy)
+        case .filesystem:
+            nil
         }
     }
 

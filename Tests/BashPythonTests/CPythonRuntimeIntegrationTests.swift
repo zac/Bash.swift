@@ -142,6 +142,8 @@ struct CPythonRuntimeIntegrationTests {
                         return .deny(message: "blocked by callback")
                     }
                     return .allow
+                case .filesystem:
+                    return .allow
                 }
             }
         )

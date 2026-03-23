@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Workspace
 
 struct BasenameCommand: BuiltinCommand {
     struct Options: ParsableArguments {

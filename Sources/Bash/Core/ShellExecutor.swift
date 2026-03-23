@@ -238,6 +238,17 @@ enum ShellExecutor {
             )
         }
 
+        let baseFilesystem = PermissionedShellFilesystem.unwrap(filesystem)
+        let initialCommandName = command.words.first?.rawValue.isEmpty == false
+            ? command.words.first!.rawValue
+            : "shell"
+        let expansionFilesystem = PermissionedShellFilesystem(
+            base: baseFilesystem,
+            commandName: initialCommandName,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl
+        )
+
         var input = stdin
         var stderr = Data()
 
@@ -245,7 +256,7 @@ enum ShellExecutor {
             if let hereDocument = redirection.hereDocument {
                 let expandedHereDocument = await expandHereDocumentBody(
                     hereDocument,
-                    filesystem: filesystem,
+                    filesystem: expansionFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     history: history,
@@ -274,14 +285,16 @@ enum ShellExecutor {
             guard let targetWord = redirection.target else { continue }
             let target = await firstExpansion(
                 word: targetWord,
-                filesystem: filesystem,
+                filesystem: expansionFilesystem,
                 currentDirectory: currentDirectory,
                 environment: environment,
                 enableGlobbing: enableGlobbing
             )
 
             do {
-                input = try await filesystem.readFile(path: PathUtils.normalize(path: target, currentDirectory: currentDirectory))
+                input = try await expansionFilesystem.readFile(
+                    path: PathUtils.normalize(path: target, currentDirectory: currentDirectory)
+                )
             } catch {
                 stderr.append(Data("\(target): \(error)\n".utf8))
                 return CommandResult(stdout: Data(), stderr: stderr, exitCode: 1)
@@ -290,7 +303,7 @@ enum ShellExecutor {
 
         let expandedWords = await expandWords(
             command.words,
-            filesystem: filesystem,
+            filesystem: expansionFilesystem,
             currentDirectory: currentDirectory,
             environment: environment,
             enableGlobbing: enableGlobbing
@@ -301,6 +314,12 @@ enum ShellExecutor {
         }
 
         let commandArgs = Array(expandedWords.dropFirst())
+        let commandFilesystem = PermissionedShellFilesystem(
+            base: baseFilesystem,
+            commandName: commandName,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl
+        )
 
         var result: CommandResult
         if commandArgs.isEmpty, let assignment = parseAssignment(commandName) {
@@ -320,7 +339,7 @@ enum ShellExecutor {
             var context = CommandContext(
                 commandName: commandName,
                 arguments: commandArgs,
-                filesystem: filesystem,
+                filesystem: commandFilesystem,
                 enableGlobbing: enableGlobbing,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
@@ -349,7 +368,7 @@ enum ShellExecutor {
                 functionBody,
                 functionArguments: commandArgs,
                 stdin: input,
-                filesystem: filesystem,
+                filesystem: baseFilesystem,
                 currentDirectory: &currentDirectory,
                 environment: &environment,
                 history: history,
@@ -375,7 +394,7 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
@@ -388,7 +407,7 @@ enum ShellExecutor {
                         secretTracker: secretTracker,
                         secretOutputRedactor: secretOutputRedactor
                     )
-                    try await filesystem.writeFile(
+                    try await commandFilesystem.writeFile(
                         path: path,
                         data: redactedOutput,
                         append: redirection.type == .stdoutAppend
@@ -402,7 +421,7 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
@@ -415,7 +434,7 @@ enum ShellExecutor {
                         secretTracker: secretTracker,
                         secretOutputRedactor: secretOutputRedactor
                     )
-                    try await filesystem.writeFile(
+                    try await commandFilesystem.writeFile(
                         path: path,
                         data: redactedStderr,
                         append: redirection.type == .stderrAppend
@@ -432,7 +451,7 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
@@ -453,7 +472,7 @@ enum ShellExecutor {
                     var combined = Data()
                     combined.append(redactedStdout)
                     combined.append(redactedStderr)
-                    try await filesystem.writeFile(
+                    try await commandFilesystem.writeFile(
                         path: path,
                         data: combined,
                         append: redirection.type == .stdoutAndErrAppend

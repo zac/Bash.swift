@@ -138,27 +138,28 @@ Optional module commands:
 ## Filesystem Architecture
 
 Filesystem protocol:
-- `Sources/Bash/FS/ShellFilesystem.swift`
-
-Rootless-session protocol:
-- `Sources/Bash/FS/SessionConfigurableFilesystem.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/WorkspaceFilesystem.swift`
 
 Implementations:
-- `Sources/Bash/FS/ReadWriteFilesystem.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/ReadWriteFilesystem.swift`
   - Real disk I/O with jail to configured root.
-- `Sources/Bash/FS/InMemoryFilesystem.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/InMemoryFilesystem.swift`
   - Pure in-memory tree.
-- `Sources/Bash/FS/SandboxFilesystem.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/OverlayFilesystem.swift`
+  - Copy-on-write snapshot of a configured disk root, with explicit `reload()` support.
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/MountableFilesystem.swift`
+  - Composes multiple filesystem backends under virtual mount points.
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/SandboxFilesystem.swift`
   - Root chooser (`documents`, `caches`, `temporary`, app group, custom URL), delegates to read-write backing.
-- `Sources/Bash/FS/SecurityScopedFilesystem.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/SecurityScopedFilesystem.swift`
   - Security-scoped URL/bookmark-backed root, optional read-only mode, runtime unsupported on tvOS/watchOS.
 
 Bookmark persistence:
-- `Sources/Bash/FS/BookmarkStore.swift`
-- `Sources/Bash/FS/UserDefaultsBookmarkStore.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/BookmarkStore.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/FS/UserDefaultsBookmarkStore.swift`
 
 Path + jail utilities:
-- `Sources/Bash/Core/PathUtils.swift`
+- `/Users/zac/Projects/collab/Workspace/Sources/Workspace/Core/PathUtils.swift`
 
 ## Parser + Executor Source Map
 
@@ -221,7 +222,7 @@ When adding or changing a command:
 
 When adding filesystem implementations:
 1. Conform to `ShellFilesystem`.
-2. Conform to `SessionConfigurableFilesystem` if rootless `BashSession(options:)` should be supported.
+2. Ensure the filesystem is ready to use before passing it into `BashSession(options:)`; do not rely on hidden session setup.
 3. Keep path normalization and jail guarantees explicit and tested.
 4. Add platform-conditional tests in `FilesystemOptionsTests`.
 

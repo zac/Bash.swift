@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Workspace
 
 struct DiffCommand: BuiltinCommand {
     struct Options: ParsableArguments {
@@ -198,4 +199,3 @@ struct DiffCommand: BuiltinCommand {
         return lines
     }
 }
-

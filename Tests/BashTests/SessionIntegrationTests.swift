@@ -1569,6 +1569,8 @@ struct SessionIntegrationTests {
         case let .network(network):
             #expect(network.url == "http://127.0.0.1:1")
             #expect(network.method == "GET")
+        case .filesystem:
+            Issue.record("expected network permission request")
         }
     }
 
@@ -1634,6 +1636,186 @@ struct SessionIntegrationTests {
 
         let requests = await probe.snapshot()
         #expect(requests.isEmpty)
+    }
+
+    @Test("filesystem permission handler can deny reads")
+    func filesystemPermissionHandlerCanDenyReads() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                switch request.kind {
+                case .filesystem:
+                    return .deny(message: "filesystem access denied")
+                case .network:
+                    return .allow
+                }
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let noteURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("note.txt")
+        try Data("hello\n".utf8).write(to: noteURL)
+
+        let result = await session.run("cat ./folder/../note.txt")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString == "./folder/../note.txt: filesystem access denied\n")
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+        #expect(requests[0].command == "cat")
+        switch requests[0].kind {
+        case let .filesystem(filesystem):
+            #expect(filesystem.operation == .readFile)
+            #expect(filesystem.path == "/home/user/note.txt")
+            #expect(filesystem.sourcePath == nil)
+            #expect(filesystem.destinationPath == nil)
+            #expect(!filesystem.append)
+            #expect(!filesystem.recursive)
+        case .network:
+            Issue.record("expected filesystem permission request")
+        }
+    }
+
+    @Test("filesystem permission handler can deny shell redirection writes without mutating")
+    func filesystemPermissionHandlerCanDenyShellRedirectionWritesWithoutMutating() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                switch request.kind {
+                case .filesystem:
+                    return .deny(message: "filesystem write denied")
+                case .network:
+                    return .allow
+                }
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("echo blocked > ./dir/../blocked.txt")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("filesystem write denied"))
+
+        let blockedURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("blocked.txt")
+        #expect(!FileManager.default.fileExists(atPath: blockedURL.path))
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+        #expect(requests[0].command == "echo")
+        switch requests[0].kind {
+        case let .filesystem(filesystem):
+            #expect(filesystem.operation == .writeFile)
+            #expect(filesystem.path == "/home/user/blocked.txt")
+            #expect(!filesystem.append)
+        case .network:
+            Issue.record("expected filesystem permission request")
+        }
+    }
+
+    @Test("filesystem permission handler allow once does not persist")
+    func filesystemPermissionHandlerAllowOnceDoesNotPersist() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                switch request.kind {
+                case .filesystem:
+                    return .allow
+                case .network:
+                    return .allow
+                }
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let noteURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("note.txt")
+        try Data("hello\n".utf8).write(to: noteURL)
+
+        let first = await session.run("cat note.txt")
+        let second = await session.run("cat note.txt")
+
+        #expect(first.exitCode == 0)
+        #expect(second.exitCode == 0)
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 2)
+    }
+
+    @Test("filesystem permission handler can allow for session")
+    func filesystemPermissionHandlerCanAllowForSession() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                switch request.kind {
+                case .filesystem:
+                    return .allowForSession
+                case .network:
+                    return .allow
+                }
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let noteURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("note.txt")
+        try Data("hello\n".utf8).write(to: noteURL)
+
+        let first = await session.run("cat note.txt")
+        let second = await session.run("cat note.txt")
+
+        #expect(first.exitCode == 0)
+        #expect(second.exitCode == 0)
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+    }
+
+    @Test("filesystem permission request captures copy source and destination")
+    func filesystemPermissionRequestCapturesCopySourceAndDestination() async throws {
+        let probe = PermissionProbe()
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                await probe.record(request)
+                switch request.kind {
+                case .filesystem:
+                    return .deny(message: "copy denied")
+                case .network:
+                    return .allow
+                }
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let sourceURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("source.txt")
+        try Data("copy me\n".utf8).write(to: sourceURL)
+
+        let result = await session.run("cp ./source.txt ./dir/../copy.txt")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("copy denied"))
+
+        let requests = await probe.snapshot()
+        #expect(requests.count == 1)
+        #expect(requests[0].command == "cp")
+        switch requests[0].kind {
+        case let .filesystem(filesystem):
+            #expect(filesystem.operation == .copy)
+            #expect(filesystem.sourcePath == "/home/user/source.txt")
+            #expect(filesystem.destinationPath == "/home/user/copy.txt")
+            #expect(!filesystem.recursive)
+        case .network:
+            Issue.record("expected filesystem permission request")
+        }
     }
 
     @Test("curl network policy can deny private ranges")
@@ -1878,6 +2060,61 @@ struct SessionIntegrationTimeoutTests {
 
         let result = await session.run(
             "curl https://example.com",
+            options: RunOptions(
+                executionLimits: ExecutionLimits(maxWallClockDuration: 0.5)
+            )
+        )
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("blocked after approval wait"))
+        #expect(!result.stderrString.contains("execution timed out"))
+    }
+
+    @Test("timeout excludes filesystem permission wait time")
+    func timeoutExcludesFilesystemPermissionWaitTime() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                guard case .filesystem = request.kind else {
+                    return .allow
+                }
+
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return .deny(message: "blocked after approval wait")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let noteURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("note.txt")
+        try Data("hello\n".utf8).write(to: noteURL)
+
+        let result = await session.run("timeout 0.5 cat note.txt")
+        #expect(result.exitCode == 1)
+        #expect(result.stderrString.contains("blocked after approval wait"))
+        #expect(!result.stderrString.contains("timed out"))
+    }
+
+    @Test("wall clock limits exclude filesystem permission wait time")
+    func wallClockLimitsExcludeFilesystemPermissionWaitTime() async throws {
+        let (session, root) = try await TestSupport.makeSession(
+            permissionHandler: { request in
+                guard case .filesystem = request.kind else {
+                    return .allow
+                }
+
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                return .deny(message: "blocked after approval wait")
+            }
+        )
+        defer { TestSupport.removeDirectory(root) }
+
+        let noteURL = root
+            .appendingPathComponent("home/user", isDirectory: true)
+            .appendingPathComponent("note.txt")
+        try Data("hello\n".utf8).write(to: noteURL)
+
+        let result = await session.run(
+            "cat note.txt",
             options: RunOptions(
                 executionLimits: ExecutionLimits(maxWallClockDuration: 0.5)
             )

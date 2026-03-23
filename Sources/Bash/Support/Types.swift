@@ -1,4 +1,5 @@
 import Foundation
+import Workspace
 
 public struct CommandResult: Sendable {
     public var stdout: Data
@@ -195,41 +196,6 @@ public enum ShellError: Error, CustomStringConvertible, Sendable {
         case let .unsupported(message):
             return message
         }
-    }
-}
-
-public struct FileInfo: Sendable {
-    public var path: String
-    public var isDirectory: Bool
-    public var isSymbolicLink: Bool
-    public var size: UInt64
-    public var permissions: Int
-    public var modificationDate: Date?
-
-    public init(
-        path: String,
-        isDirectory: Bool,
-        isSymbolicLink: Bool,
-        size: UInt64,
-        permissions: Int,
-        modificationDate: Date?
-    ) {
-        self.path = path
-        self.isDirectory = isDirectory
-        self.isSymbolicLink = isSymbolicLink
-        self.size = size
-        self.permissions = permissions
-        self.modificationDate = modificationDate
-    }
-}
-
-public struct DirectoryEntry: Sendable {
-    public var name: String
-    public var info: FileInfo
-
-    public init(name: String, info: FileInfo) {
-        self.name = name
-        self.info = info
     }
 }
 

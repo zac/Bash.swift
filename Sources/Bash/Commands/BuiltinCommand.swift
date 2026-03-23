@@ -233,14 +233,11 @@ public struct CommandContext: Sendable {
     public func requestPermission(
         _ request: PermissionRequest
     ) async -> PermissionDecision {
-        if let permissionAuthorizer = permissionAuthorizer as? PermissionAuthorizer {
-            return await permissionAuthorizer.authorize(
-                request,
-                pausing: executionControl
-            )
-        }
-
-        return await permissionAuthorizer.authorize(request)
+        await authorizePermissionRequest(
+            request,
+            using: permissionAuthorizer,
+            pausing: executionControl
+        )
     }
 
     public func requestNetworkPermission(
@@ -302,6 +299,12 @@ public struct CommandContext: Sendable {
         let commandArgs = Array(argv.dropFirst())
         let effectiveExecutionControl = executionControlOverride ?? executionControl
         let effectivePermissionAuthorizer = permissionAuthorizerOverride ?? permissionAuthorizer
+        let childFilesystem = PermissionedShellFilesystem(
+            base: PermissionedShellFilesystem.unwrap(filesystem),
+            commandName: commandName,
+            permissionAuthorizer: effectivePermissionAuthorizer,
+            executionControl: effectiveExecutionControl
+        )
         if let failure = await effectiveExecutionControl?.recordCommandExecution(commandName: commandName) {
             return (
                 CommandResult(
@@ -317,7 +320,7 @@ public struct CommandContext: Sendable {
         var childContext = CommandContext(
             commandName: commandName,
             arguments: commandArgs,
-            filesystem: filesystem,
+            filesystem: childFilesystem,
             enableGlobbing: enableGlobbing,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
