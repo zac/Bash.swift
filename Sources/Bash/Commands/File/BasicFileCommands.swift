@@ -112,7 +112,7 @@ struct StatCommand: BuiltinCommand {
                 context.writeStdout("  File: \(path)\n")
                 context.writeStdout("  Size: \(info.size)\n")
                 context.writeStdout("  Type: \(type)\n")
-                context.writeStdout("  Mode: \(String(info.permissions, radix: 8))\n")
+                context.writeStdout("  Mode: \(String(info.permissionBits, radix: 8))\n")
             } catch {
                 context.writeStderr("stat: \(path): \(error)\n")
                 failed = true
@@ -157,4 +157,3 @@ struct TouchCommand: BuiltinCommand {
         return failed ? 1 : 0
     }
 }
-

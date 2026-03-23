@@ -38,11 +38,11 @@ struct LsCommand: BuiltinCommand {
 
                     if options.long {
                         for entry in filtered {
-                            let mode = String(entry.info.permissions, radix: 8)
+                            let mode = String(entry.info.permissionBits, radix: 8)
                             context.writeStdout("\(mode) \(entry.info.size) \(entry.name)\n")
                         }
                     } else {
-                        context.writeStdout(filtered.map(\ .name).joined(separator: " "))
+                        context.writeStdout(filtered.map(\.name).joined(separator: " "))
                         context.writeStdout("\n")
                     }
                 } else {
@@ -116,4 +116,3 @@ struct RmdirCommand: BuiltinCommand {
         return failed ? 1 : 0
     }
 }
-

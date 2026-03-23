@@ -49,12 +49,12 @@ struct ChmodCommand: BuiltinCommand {
 
     private static func applyMode(
         _ mode: ModeSpec,
-        to path: String,
+        to path: WorkspacePath,
         recursive: Bool,
-        filesystem: any ShellFilesystem
+        filesystem: any FileSystem
     ) async throws {
         let info = try await filesystem.stat(path: path)
-        let permissions = try mode.resolve(currentPermissions: info.permissions)
+        let permissions = try mode.resolve(currentPermissions: info.permissionBits)
         try await filesystem.setPermissions(path: path, permissions: permissions)
         guard recursive else {
             return
@@ -68,7 +68,7 @@ struct ChmodCommand: BuiltinCommand {
         for entry in entries {
             try await applyMode(
                 mode,
-                to: PathUtils.join(path, entry.name),
+                to: path.appending(entry.name),
                 recursive: true,
                 filesystem: filesystem
             )
@@ -79,14 +79,15 @@ struct ChmodCommand: BuiltinCommand {
         case absolute(Int)
         case symbolic([SymbolicOperation])
 
-        func resolve(currentPermissions: Int) throws -> Int {
+        func resolve(currentPermissions: Int) throws -> POSIXPermissions {
             switch self {
             case let .absolute(value):
-                return value
+                return POSIXPermissions(value)
             case let .symbolic(operations):
-                return operations.reduce(currentPermissions) { partial, operation in
+                let resolved = operations.reduce(currentPermissions) { partial, operation in
                     operation.apply(to: partial)
                 }
+                return POSIXPermissions(resolved)
             }
         }
     }
@@ -219,4 +220,3 @@ struct FileCommand: BuiltinCommand {
         return failed ? 1 : 0
     }
 }
-

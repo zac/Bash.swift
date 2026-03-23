@@ -50,7 +50,7 @@ enum CommandFS {
         return (contents, failed)
     }
 
-    static func recursiveSize(of path: String, filesystem: any ShellFilesystem) async throws -> UInt64 {
+    static func recursiveSize(of path: WorkspacePath, filesystem: any FileSystem) async throws -> UInt64 {
         let info = try await filesystem.stat(path: path)
         if !info.isDirectory {
             return info.size
@@ -59,12 +59,12 @@ enum CommandFS {
         var total: UInt64 = 0
         let children = try await filesystem.listDirectory(path: path)
         for child in children {
-            total += try await recursiveSize(of: PathUtils.join(path, child.name), filesystem: filesystem)
+            total += try await recursiveSize(of: path.appending(child.name), filesystem: filesystem)
         }
         return total
     }
 
-    static func walk(path: String, filesystem: any ShellFilesystem) async throws -> [String] {
+    static func walk(path: WorkspacePath, filesystem: any FileSystem) async throws -> [WorkspacePath] {
         var output = [path]
         let info = try await filesystem.stat(path: path)
         guard info.isDirectory else {
@@ -73,7 +73,7 @@ enum CommandFS {
 
         let children = try await filesystem.listDirectory(path: path)
         for child in children {
-            let childPath = PathUtils.join(path, child.name)
+            let childPath = path.appending(child.name)
             output.append(contentsOf: try await walk(path: childPath, filesystem: filesystem))
         }
         return output
@@ -103,7 +103,7 @@ enum CommandFS {
     }
 
     static func wildcardMatch(pattern: String, value: String) -> Bool {
-        let regexString = PathUtils.globToRegex(pattern)
+        let regexString = WorkspacePath.globToRegex(pattern)
         guard let regex = try? NSRegularExpression(pattern: regexString) else {
             return false
         }
@@ -147,5 +147,60 @@ enum CommandHash {
 
     static func md5(_ data: Data) -> String {
         Insecure.MD5.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
+enum SecretAwareSinkSupport {
+    static let secretReferencePrefix = "secretref:"
+
+    static func resolveSecretReferences(
+        in value: String,
+        context: inout CommandContext
+    ) async throws -> String {
+        guard value.contains(secretReferencePrefix) else {
+            return value
+        }
+
+        var output = ""
+        var index = value.startIndex
+
+        while index < value.endIndex {
+            guard let prefixRange = value[index...].range(of: secretReferencePrefix) else {
+                output += String(value[index...])
+                break
+            }
+
+            output += String(value[index..<prefixRange.lowerBound])
+            var end = prefixRange.upperBound
+            while end < value.endIndex, isSecretReferenceCharacter(value[end]) {
+                end = value.index(after: end)
+            }
+
+            let candidate = String(value[prefixRange.lowerBound..<end])
+            if candidate == secretReferencePrefix {
+                output += candidate
+                index = end
+                continue
+            }
+
+            if let resolved = try await context.resolveSecretReferenceIfEnabled(candidate) {
+                guard let resolvedString = String(data: resolved, encoding: .utf8) else {
+                    throw ShellError.unsupported(
+                        "secret reference resolved to non-UTF-8 data and cannot be used in sink arguments"
+                    )
+                }
+                output += resolvedString
+            } else {
+                output += candidate
+            }
+
+            index = end
+        }
+
+        return output
+    }
+
+    private static func isSecretReferenceCharacter(_ character: Character) -> Bool {
+        character == "-" || character == "_" || character.isLetter || character.isNumber
     }
 }

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Workspace
 
 struct BasenameCommand: BuiltinCommand {
     struct Options: ParsableArguments {
@@ -36,7 +37,7 @@ struct BasenameCommand: BuiltinCommand {
         }
 
         for name in names {
-            var base = PathUtils.basename(name)
+            var base = WorkspacePath.basename(name)
             if let suffix, !suffix.isEmpty, base.hasSuffix(suffix) {
                 base.removeLast(suffix.count)
             }
@@ -65,8 +66,8 @@ struct CdCommand: BuiltinCommand {
                 context.writeStderr("cd: not a directory: \(destination)\n")
                 return 1
             }
-            context.currentDirectory = resolved
-            context.environment["PWD"] = resolved
+            context.currentDirectory = resolved.string
+            context.environment["PWD"] = resolved.string
             return 0
         } catch {
             context.writeStderr("cd: \(destination): \(error)\n")
@@ -91,7 +92,7 @@ struct DirnameCommand: BuiltinCommand {
         }
 
         for path in options.paths {
-            context.writeStdout(PathUtils.dirname(path) + "\n")
+            context.writeStdout(WorkspacePath.dirname(path).string + "\n")
         }
 
         return 0
@@ -124,7 +125,7 @@ struct DuCommand: BuiltinCommand {
                     let walked = try await CommandFS.walk(path: resolved, filesystem: context.filesystem)
                     for entry in walked {
                         let size = try await CommandFS.recursiveSize(of: entry, filesystem: context.filesystem)
-                        context.writeStdout("\(size)\t\(entry)\n")
+                        context.writeStdout("\(size)\t\(entry.string)\n")
                     }
                 }
             } catch {
@@ -357,7 +358,7 @@ struct FindCommand: BuiltinCommand {
 
     private struct FindRuntime {
         var pendingBatchExecPaths: [Int: [String]] = [:]
-        var pendingDirectoryDeletes: Set<String> = []
+        var pendingDirectoryDeletes: Set<WorkspacePath> = []
         var hadError = false
     }
 
@@ -784,8 +785,8 @@ struct FindCommand: BuiltinCommand {
     }
 
     private static func traverse(
-        path: String,
-        rootPath: String,
+        path: WorkspacePath,
+        rootPath: WorkspacePath,
         depth: Int,
         parsed: ParsedFindInvocation,
         context: inout CommandContext,
@@ -820,7 +821,7 @@ struct FindCommand: BuiltinCommand {
 
             shouldPrune = evalResult.shouldPrune
             if evalResult.matches, parsed.useDefaultPrint {
-                context.writeStdout("\(path)\n")
+                context.writeStdout("\(path.string)\n")
             }
         }
 
@@ -846,7 +847,7 @@ struct FindCommand: BuiltinCommand {
 
         for child in children.sorted(by: { $0.name < $1.name }) {
             await traverse(
-                path: PathUtils.join(path, child.name),
+                path: path.appending(child.name),
                 rootPath: rootPath,
                 depth: depth + 1,
                 parsed: parsed,
@@ -858,8 +859,8 @@ struct FindCommand: BuiltinCommand {
 
     private static func evaluate(
         _ expression: FindExpression,
-        path: String,
-        rootPath: String,
+        path: WorkspacePath,
+        rootPath: WorkspacePath,
         info: FileInfo,
         depth: Int,
         parsed: ParsedFindInvocation,
@@ -953,8 +954,8 @@ struct FindCommand: BuiltinCommand {
 
     private static func evaluatePredicate(
         _ predicate: FindPredicate,
-        path: String,
-        rootPath: String,
+        path: WorkspacePath,
+        rootPath: WorkspacePath,
         info: FileInfo,
         depth: Int,
         parsed: ParsedFindInvocation,
@@ -963,19 +964,19 @@ struct FindCommand: BuiltinCommand {
     ) async -> FindEvalResult {
         switch predicate {
         case let .name(pattern, ignoreCase):
-            let base = PathUtils.basename(path)
+            let base = path.basename
             return FindEvalResult(
                 matches: wildcardMatches(pattern: pattern, value: base, ignoreCase: ignoreCase),
                 shouldPrune: false
             )
         case let .path(pattern, ignoreCase):
             return FindEvalResult(
-                matches: wildcardMatches(pattern: pattern, value: path, ignoreCase: ignoreCase),
+                matches: wildcardMatches(pattern: pattern, value: path.string, ignoreCase: ignoreCase),
                 shouldPrune: false
             )
         case let .regex(pattern, ignoreCase):
             return FindEvalResult(
-                matches: regexMatches(pattern: pattern, value: path, ignoreCase: ignoreCase),
+                matches: regexMatches(pattern: pattern, value: path.string, ignoreCase: ignoreCase),
                 shouldPrune: false
             )
         case let .type(type):
@@ -1035,7 +1036,7 @@ struct FindCommand: BuiltinCommand {
             }
             return FindEvalResult(matches: matches, shouldPrune: false)
         case let .perm(mode, matchType):
-            let current = info.permissions & 0o777
+            let current = info.permissionBits & 0o777
             let target = mode & 0o777
             let matches: Bool
             switch matchType {
@@ -1050,10 +1051,10 @@ struct FindCommand: BuiltinCommand {
         case .prune:
             return FindEvalResult(matches: true, shouldPrune: true)
         case .print:
-            context.writeStdout("\(path)\n")
+            context.writeStdout("\(path.string)\n")
             return FindEvalResult(matches: true, shouldPrune: false)
         case .print0:
-            context.stdout.append(Data(path.utf8))
+            context.stdout.append(Data(path.string.utf8))
             context.stdout.append(Data([0]))
             return FindEvalResult(matches: true, shouldPrune: false)
         case let .printf(format):
@@ -1082,11 +1083,11 @@ struct FindCommand: BuiltinCommand {
 
             let action = parsed.execActions[actionIndex]
             if action.batchMode {
-                runtime.pendingBatchExecPaths[actionIndex, default: []].append(path)
+                runtime.pendingBatchExecPaths[actionIndex, default: []].append(path.string)
                 return FindEvalResult(matches: true, shouldPrune: false)
             }
 
-            let argv = expandExecCommandSingle(action.command, path: path)
+            let argv = expandExecCommandSingle(action.command, path: path.string)
             let subcommand = await context.runSubcommandIsolated(argv, stdin: Data())
             context.stdout.append(subcommand.result.stdout)
             context.stderr.append(subcommand.result.stderr)
@@ -1102,7 +1103,7 @@ struct FindCommand: BuiltinCommand {
         runtime: inout FindRuntime
     ) async {
         let ordered = runtime.pendingDirectoryDeletes.sorted {
-            PathUtils.splitComponents($0).count > PathUtils.splitComponents($1).count
+            $0.components.count > $1.components.count
         }
 
         for path in ordered {
@@ -1282,8 +1283,8 @@ struct FindCommand: BuiltinCommand {
 
     private static func renderPrintf(
         format: String,
-        path: String,
-        rootPath: String,
+        path: WorkspacePath,
+        rootPath: WorkspacePath,
         info: FileInfo,
         depth: Int
     ) -> String {
@@ -1291,7 +1292,7 @@ struct FindCommand: BuiltinCommand {
         let chars = Array(unescaped)
         var output = ""
         var index = 0
-        let mode = String(format: "%03o", info.permissions & 0o777)
+        let mode = String(format: "%03o", info.permissionBits & 0o777)
 
         while index < chars.count {
             let char = chars[index]
@@ -1312,13 +1313,13 @@ struct FindCommand: BuiltinCommand {
             case "%":
                 output.append("%")
             case "p":
-                output += path
+                output += path.string
             case "P":
                 output += relativeToRoot(path: path, rootPath: rootPath)
             case "f":
-                output += PathUtils.basename(path)
+                output += path.basename
             case "h":
-                output += PathUtils.dirname(path)
+                output += path.dirname.string
             case "s":
                 output += String(info.size)
             case "d":
@@ -1335,21 +1336,21 @@ struct FindCommand: BuiltinCommand {
         return output
     }
 
-    private static func relativeToRoot(path: String, rootPath: String) -> String {
+    private static func relativeToRoot(path: WorkspacePath, rootPath: WorkspacePath) -> String {
         if path == rootPath {
             return "."
         }
 
-        if rootPath == "/" {
-            return String(path.drop(while: { $0 == "/" }))
+        if rootPath.isRoot {
+            return String(path.string.drop(while: { $0 == "/" }))
         }
 
-        let prefix = rootPath + "/"
-        if path.hasPrefix(prefix) {
-            return String(path.dropFirst(prefix.count))
+        let prefix = rootPath.string + "/"
+        if path.string.hasPrefix(prefix) {
+            return String(path.string.dropFirst(prefix.count))
         }
 
-        return path
+        return path.string
     }
 
     private static func unescapePrintf(_ input: String) -> String {

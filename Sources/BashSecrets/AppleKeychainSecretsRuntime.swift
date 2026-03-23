@@ -1,8 +1,17 @@
-#if canImport(Security)
+#if canImport(CryptoKit) && canImport(Security)
+import CryptoKit
 import Foundation
 import Security
 
-public struct AppleKeychainSecretsRuntime: SecretsRuntime {
+public actor AppleKeychainSecretsProvider: SecretsProvider {
+    private enum Constants {
+        static let referenceKeyService = "dev.velos.BashSecrets.reference-key"
+        static let referenceKeyAccount = "v2"
+        static let referenceKeyLabel = "BashSecrets reference key"
+    }
+
+    private var cachedReferenceKey: SymmetricKey?
+
     public init() {}
 
     public func putGenericPassword(
@@ -10,7 +19,7 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
         value: Data,
         label: String?,
         update: Bool
-    ) async throws {
+    ) async throws -> String {
         let query = baseQuery(locator: locator)
         var attributes: [String: Any] = [
             kSecValueData as String: value,
@@ -23,7 +32,7 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
             let status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
             switch status {
             case errSecSuccess:
-                return
+                return try issueReference(for: locator)
             case errSecItemNotFound:
                 break
             default:
@@ -43,7 +52,7 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
         let addStatus = SecItemAdd(addQuery as CFDictionary, nil)
         switch addStatus {
         case errSecSuccess:
-            return
+            return try issueReference(for: locator)
         case errSecDuplicateItem:
             throw SecretsError.duplicateItem(locator)
         default:
@@ -55,10 +64,16 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
         }
     }
 
+    public func reference(for locator: SecretLocator) async throws -> String {
+        _ = try loadMetadata(locator: locator)
+        return try issueReference(for: locator)
+    }
+
     public func getGenericPassword(
-        locator: SecretLocator,
+        reference: String,
         revealValue: Bool
     ) async throws -> SecretFetchResult {
+        let locator = try locator(forReference: reference)
         let metadata = try loadMetadata(locator: locator)
         let value: Data?
         if revealValue {
@@ -69,7 +84,8 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
         return SecretFetchResult(metadata: metadata, value: value)
     }
 
-    public func deleteGenericPassword(locator: SecretLocator) async throws -> Bool {
+    public func deleteReference(_ reference: String) async throws -> Bool {
+        let locator = try locator(forReference: reference)
         let query = baseQuery(locator: locator)
         let status = SecItemDelete(query as CFDictionary)
 
@@ -83,6 +99,98 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
                 status,
                 operation: "delete",
                 locator: locator
+            )
+        }
+    }
+
+    private func locator(forReference reference: String) throws -> SecretLocator {
+        try SecretReference.parseGenericPasswordReference(
+            reference,
+            using: try referenceKey()
+        )
+    }
+
+    private func issueReference(for locator: SecretLocator) throws -> String {
+        try SecretReference.makeGenericPasswordReference(
+            locator: locator,
+            using: try referenceKey()
+        )
+    }
+
+    private func referenceKey() throws -> SymmetricKey {
+        if let cachedReferenceKey {
+            return cachedReferenceKey
+        }
+
+        if let existing = try loadReferenceKeyData() {
+            guard existing.count == 32 else {
+                throw SecretsError.runtimeFailure("keychain reference key payload is invalid")
+            }
+            let key = SymmetricKey(data: existing)
+            cachedReferenceKey = key
+            return key
+        }
+
+        let key = SymmetricKey(size: .bits256)
+        let keyData = key.rawData
+        if try storeReferenceKeyData(keyData) {
+            cachedReferenceKey = key
+            return key
+        }
+
+        if let existing = try loadReferenceKeyData(), existing.count == 32 {
+            let sharedKey = SymmetricKey(data: existing)
+            cachedReferenceKey = sharedKey
+            return sharedKey
+        }
+
+        throw SecretsError.runtimeFailure("keychain reference key payload is invalid")
+    }
+
+    private func loadReferenceKeyData() throws -> Data? {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Constants.referenceKeyService,
+            kSecAttrAccount as String: Constants.referenceKeyAccount,
+            kSecMatchLimit as String: kSecMatchLimitOne,
+            kSecReturnData as String: kCFBooleanTrue as Any,
+        ]
+
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        switch status {
+        case errSecSuccess:
+            guard let value = item as? Data else {
+                throw SecretsError.runtimeFailure("keychain returned a non-data reference key")
+            }
+            return value
+        case errSecItemNotFound:
+            return nil
+        default:
+            throw SecretsError.runtimeFailure(
+                "keychain read reference key failed: \(statusMessage(status)) (\(status))"
+            )
+        }
+    }
+
+    private func storeReferenceKeyData(_ data: Data) throws -> Bool {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: Constants.referenceKeyService,
+            kSecAttrAccount as String: Constants.referenceKeyAccount,
+            kSecAttrLabel as String: Constants.referenceKeyLabel,
+            kSecValueData as String: data,
+        ]
+
+        let status = SecItemAdd(query as CFDictionary, nil)
+        switch status {
+        case errSecSuccess:
+            return true
+        case errSecDuplicateItem:
+            return false
+        default:
+            throw SecretsError.runtimeFailure(
+                "keychain write reference key failed: \(statusMessage(status)) (\(status))"
             )
         }
     }
@@ -152,8 +260,6 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
             kSecAttrAccount as String: locator.account,
         ]
 
-        // Keep optional keychain routing metadata in the item/query identity
-        // so same service/account can be scoped independently.
         if let keychain = locator.keychain, !keychain.isEmpty {
             query[kSecAttrGeneric as String] = Data(keychain.utf8)
         }
@@ -172,9 +278,52 @@ public struct AppleKeychainSecretsRuntime: SecretsRuntime {
         case errSecDuplicateItem:
             return .duplicateItem(locator)
         default:
-            let message = SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
-            return .runtimeFailure("keychain \(operation) failed: \(message) (\(status))")
+            return .runtimeFailure(
+                "keychain \(operation) failed: \(statusMessage(status)) (\(status))"
+            )
         }
+    }
+
+    private func statusMessage(_ status: OSStatus) -> String {
+        SecCopyErrorMessageString(status, nil) as String? ?? "OSStatus \(status)"
+    }
+}
+#else
+import Foundation
+
+public struct AppleKeychainSecretsProvider: SecretsProvider {
+    public init() {}
+
+    public func putGenericPassword(
+        locator: SecretLocator,
+        value: Data,
+        label: String?,
+        update: Bool
+    ) async throws -> String {
+        _ = locator
+        _ = value
+        _ = label
+        _ = update
+        throw SecretsError.unsupported("keychain secrets are not supported on this platform")
+    }
+
+    public func reference(for locator: SecretLocator) async throws -> String {
+        _ = locator
+        throw SecretsError.unsupported("keychain secrets are not supported on this platform")
+    }
+
+    public func getGenericPassword(
+        reference: String,
+        revealValue: Bool
+    ) async throws -> SecretFetchResult {
+        _ = reference
+        _ = revealValue
+        throw SecretsError.unsupported("keychain secrets are not supported on this platform")
+    }
+
+    public func deleteReference(_ reference: String) async throws -> Bool {
+        _ = reference
+        throw SecretsError.unsupported("keychain secrets are not supported on this platform")
     }
 }
 #endif

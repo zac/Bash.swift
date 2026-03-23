@@ -2,9 +2,13 @@ import Foundation
 import Bash
 
 public struct BashSecretsReferenceResolver: SecretReferenceResolving {
-    public init() {}
+    public let provider: any SecretsProvider
+
+    public init(provider: any SecretsProvider) {
+        self.provider = provider
+    }
 
     public func resolveSecretReference(_ reference: String) async throws -> Data {
-        try await Secrets.resolveReference(reference)
+        try await provider.resolveReference(reference)
     }
 }

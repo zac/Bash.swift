@@ -1,40 +1,24 @@
 # Bash.swift
 
-`Bash.swift` provides an in-process, stateful, emulated shell for Swift apps. It's heavily inspired by [just-bash](https://github.com/vercel-labs/just-bash).
+`Bash.swift` is an in-process, stateful shell for Swift apps. It is inspired by [just-bash](https://github.com/vercel-labs/just-bash). Commands runs inside Swift instead of spawning host shell processes.
 
-Repository: [github.com/velos/Bash.swift](https://github.com/velos/Bash.swift)
+You create a `BashSession`, run shell command strings, and get structured `stdout`, `stderr`, and `exitCode` results back. Session state persists across runs, including the working directory, environment, history, and registered built-ins.
 
-You create a `BashSession`, run shell command strings, and get structured `stdout` / `stderr` / `exitCode` results. Commands mutate a real directory on disk through a sandboxed, root-jail filesystem abstraction.
-
-## Development Process
-
-Development of `Bash.swift` was approached very similarly to [just-bash](https://github.com/vercel-labs/just-bash). All output was with GPT-5.3-Codex Extra High thinking, initiated by an interactively built plan, executed by the model after the plan was finalized.
-
-## Contents
-
-- [Why](#why)
-- [Installation](#installation)
-- [Platform Support](#platform-support)
-- [Quick Start](#quick-start)
-- [Public API](#public-api)
-- [How It Works](#how-it-works)
-- [Filesystem Model](#filesystem-model)
-- [Implemented Commands](#implemented-commands)
-- [Eval Runner and Profiles](#eval-runner-and-profiles)
-- [Testing](#testing)
-- [Roadmap](#roadmap)
+`Bash.swift` should be treated as beta software. It is practical for app and agent workflows, but it is not a hardened isolation boundary and it is not a drop-in replacement for a real system shell. APIs are being actively experimented with and deployed. Ensure you lock to a specific commit or version tag if you plan to do any work utilizing this library.
 
 ## Why
 
-`Bash.swift` is aimed at providing a tool for use in agents. Leveraging the approach that "Bash is all you need". To enable this use-case, it provides:
-- Stateful shell session (`cd`, `export`, `history` persist across `run` calls)
-- Real filesystem side effects under a controlled root directory
-- Built-in fake CLIs implemented in Swift (no subprocess dependency)
-- Shell parsing/execution features needed for scripts (`|`, redirection, `&&`, `||`, `;`, `&`)
+`Bash.swift` is built for app and agent workflows that need shell-like behavior without subprocess management.
+
+It provides:
+- Stateful shell sessions (`cd`, `export`, `history`, shell functions)
+- Real filesystem side effects under a controlled root
+- In-process built-in commands implemented in Swift
+- Practical shell syntax support for pipelines, redirection, chaining, background jobs, and simple scripting
 
 ## Installation
 
-### Swift Package Manager (remote package)
+Add `Bash` with SwiftPM:
 
 ```swift
 // Package.swift
@@ -49,20 +33,19 @@ Development of `Bash.swift` was approached very similarly to [just-bash](https:/
 ]
 ```
 
-`BashSQLite`, `BashPython`, `BashGit`, and `BashSecrets` are optional products. Add them only if needed:
+Optional products:
 
 ```swift
 dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit", "BashSecrets"]
 ```
 
-`BashPython` uses a remote `CPython.xcframework` binary target hosted in the repo's GitHub Releases, so consumers do not
-need Git LFS and the prebuilt CPython framework is not checked into the repository.
+Notes:
+- `Bash.swift` now depends on a separate `Workspace` package for the reusable filesystem layer.
+- `Bash` reexports the Workspace filesystem types, so callers can use `FileSystem`, `WorkspacePath`, `ReadWriteFilesystem`, `InMemoryFilesystem`, `OverlayFilesystem`, `MountableFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem` directly from `Bash`.
+- `BashPython` uses a prebuilt `CPython.xcframework` binary target.
+- `BashGit` uses a prebuilt `Clibgit2.xcframework` binary target.
 
-If you include optional products, remember to register their commands at runtime (`registerSQLite3`, `registerPython`, `registerGit`, `registerSecrets`).
-
-## Platform Support
-
-Current package platforms:
+Supported package platforms:
 - macOS 13+
 - iOS 16+
 - tvOS 16+
@@ -85,435 +68,215 @@ let piped = await session.run("echo hello | tee out.txt > copy.txt")
 print(piped.exitCode) // 0
 ```
 
-Optional `sqlite3` registration:
+For isolated per-run overrides without mutating the session's persisted shell state:
+
+```swift
+let scoped = await session.run(
+    "pwd && echo $MODE",
+    options: RunOptions(
+        environment: ["MODE": "preview"],
+        currentDirectory: "/tmp"
+    )
+)
+```
+
+## Optional Modules
+
+Optional command sets must be registered at runtime.
+
+`BashSQLite`:
 
 ```swift
 import BashSQLite
 
 await session.registerSQLite3()
-let sql = await session.run("sqlite3 :memory: \"select 1;\"")
-print(sql.stdoutString) // 1
+let result = await session.run("sqlite3 :memory: \"select 1;\"")
+print(result.stdoutString) // 1
 ```
 
-Optional `python3` / `python` registration:
+`BashPython`:
 
 ```swift
 import BashPython
 
-await BashPython.setCPythonRuntime() // Optional: defaults to strict filesystem shims.
+await BashPython.setCPythonRuntime()
 await session.registerPython()
-
 let py = await session.run("python3 -c \"print('hi')\"")
 print(py.stdoutString) // hi
 ```
 
-`BashPython` embeds CPython directly (no JavaScriptCore/Pyodide path). The current prebuilt CPython runtime is available on macOS.
-On other Apple platforms, including iOS/iPadOS, Mac Catalyst, tvOS, and watchOS, the module still compiles but runtime execution returns an unavailable error.
-Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple-runtime.md`](docs/cpython-apple-runtime.md).
+`BashPython` embeds CPython directly. The current prebuilt runtime is available on macOS. Other Apple platforms still compile, but runtime execution returns unavailable errors. Filesystem access stays inside the shell's configured `FileSystem`, and escape APIs such as `subprocess`, `ctypes`, and `os.system` are intentionally blocked. Maintainer notes for the broader Apple runtime plan live in [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md).
 
-Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
-Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
-`pip` and arbitrary native extension loading are non-goals in this runtime profile.
-
-Optional `git` registration:
+`BashGit`:
 
 ```swift
 import BashGit
 
 await session.registerGit()
 _ = await session.run("git init")
-_ = await session.run("git add -A")
-let commit = await session.run("git commit -m \"Initial commit\"")
-print(commit.exitCode)
 ```
 
-`BashGit` uses a prebuilt `Clibgit2.xcframework` binary target (iOS, iOS Simulator, macOS, Catalyst). The binary artifact is fetched by SwiftPM during dependency resolution.
-
-Optional `secrets` registration:
+`BashSecrets`:
 
 ```swift
 import BashSecrets
 
-await session.registerSecrets()
-let ref = await session.run("secrets put --service app --account api", stdin: Data("token".utf8))
-let use = await session.run("secrets run --env API_TOKEN=\(ref.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)) -- printenv API_TOKEN")
-print(use.stdoutString)
+let provider = AppleKeychainSecretsProvider()
+await session.registerSecrets(provider: provider)
+let ref = await session.run(
+    "secrets put --service app --account api",
+    stdin: Data("token".utf8)
+)
 ```
 
-`BashSecrets` defaults to Apple Keychain generic-password storage through Security.framework and emits opaque `secretref:v1:...` references.
+`BashSecrets` uses provider-owned opaque `secretref:...` references. `secrets get --reveal` is explicit, and `.resolveAndRedact` or `.strict` policies keep plaintext out of caller-visible output by default.
 
-For harness/tooling flows where the model should only handle references, use the `Secrets` API directly:
+## Workspace Package
+
+`Bash` sits on top of a reusable `Workspace` package. If you only need filesystem and workspace tooling, use `Workspace` directly instead of `BashSession`.
+
+Example:
 
 ```swift
-let ref = try await Secrets.putGenericPassword(
-    service: "app",
-    account: "api",
-    value: Data("token".utf8)
+import Workspace
+
+let filesystem = PermissionedFileSystem(
+    base: try OverlayFilesystem(rootDirectory: workspaceRoot),
+    authorizer: PermissionAuthorizer { request in
+        switch request.operation {
+        case .readFile, .listDirectory, .stat:
+            return .allowForSession
+        default:
+            return .deny(message: "write access denied")
+        }
+    }
 )
 
-// Resolve inside trusted tool code, not in model-visible shell output.
-let secretValue = try await Secrets.resolveReference(ref)
+let workspace = Workspace(filesystem: filesystem)
+let tree = try await workspace.summarizeTree("/workspace", maxDepth: 2)
 ```
 
-For secret-aware command execution/redaction inside `BashSession`, configure a resolver and policy:
+## API Summary
 
-```swift
-let options = SessionOptions(
-    filesystem: ReadWriteFilesystem(),
-    layout: .unixLike,
-    secretPolicy: .strict,
-    secretResolver: BashSecretsReferenceResolver()
-)
-let session = try await BashSession(rootDirectory: root, options: options)
-```
-
-Policies:
-- `.off`: no automatic secret-reference resolution/redaction in builtins
-- `.resolveAndRedact`: resolve refs (where supported) and redact/replace secrets in output
-- `.strict`: like `.resolveAndRedact`, plus blocks high-risk flows like `secrets get --reveal`
-
-## Public API
-
-### `BashSession`
+Primary entry point:
 
 ```swift
 public final actor BashSession {
     public init(rootDirectory: URL, options: SessionOptions = .init()) async throws
     public init(options: SessionOptions = .init()) async throws
     public func run(_ commandLine: String, stdin: Data = Data()) async -> CommandResult
+    public func run(_ commandLine: String, options: RunOptions) async -> CommandResult
     public func register(_ command: any BuiltinCommand.Type) async
-    public var currentDirectory: String { get async }
-    public var environment: [String: String] { get async }
 }
 ```
 
-### `CommandResult`
+High-level types:
+- `CommandResult`: `stdout`, `stderr`, `exitCode`, plus string helpers
+- `RunOptions`: per-run `stdin`, environment overrides, temporary `cwd`, execution limits, and cancellation probe
+- `ExecutionLimits`: caps command count, function depth, loop iterations, command substitution depth, and optional wall-clock duration
+- `SessionOptions`: filesystem, layout, initial environment, globbing, history length, network policy, execution limits, permission callback, and secret policy
+- `ShellPermissionRequest` / `ShellPermissionDecision`: shell-facing permission callback types
+- `ShellNetworkPolicy`: built-in outbound network policy
 
-```swift
-public struct CommandResult {
-    public var stdout: Data
-    public var stderr: Data
-    public var exitCode: Int32
+Practical behavior:
+- `BashSession.init` can throw during setup
+- `run` always returns a `CommandResult`, including parser/runtime faults
+- Unknown commands return exit code `127`
+- Parser/runtime faults use exit code `2`
+- `maxWallClockDuration` failures use exit code `124`
+- Cancellation uses exit code `130`
 
-    public var stdoutString: String { get }
-    public var stderrString: String { get }
-}
-```
+## Security Model
 
-### `SessionOptions`
+`Bash.swift` is a practical execution environment, not a hardened sandbox.
 
-```swift
-public struct SessionOptions {
-    public var filesystem: any ShellFilesystem
-    public var layout: SessionLayout
-    public var initialEnvironment: [String: String]
-    public var enableGlobbing: Bool
-    public var maxHistory: Int
-    public var secretPolicy: SecretHandlingPolicy
-    public var secretResolver: (any SecretReferenceResolving)?
-    public var secretOutputRedactor: any SecretOutputRedacting
-}
-```
+Current hardening layers include:
+- Root-jail filesystem implementations plus null-byte path rejection
+- Optional permission callbacks for filesystem and network access
+- `ShellNetworkPolicy` with default-off HTTP(S), host allowlists, URL-prefix allowlists, and private-range blocking
+- Execution budgets through `ExecutionLimits`
+- Strict `BashPython` shims that block process and FFI escape APIs
+- Secret-reference resolution and redaction policies
 
-Defaults:
-- `filesystem`: `ReadWriteFilesystem()`
-- `layout`: `.unixLike`
-- `initialEnvironment`: `[:]`
-- `enableGlobbing`: `true`
-- `maxHistory`: `1000`
-- `secretPolicy`: `.off`
-- `secretResolver`: `nil`
-- `secretOutputRedactor`: `DefaultSecretOutputRedactor()`
-
-Available filesystem implementations:
-- `ReadWriteFilesystem`: root-jail wrapper over real disk I/O.
-- `InMemoryFilesystem`: fully in-memory filesystem with no disk writes.
-- `SandboxFilesystem`: resolves app container-style roots (`documents`, `caches`, `temporary`, app group, custom URL).
-- `SecurityScopedFilesystem`: URL/bookmark-backed filesystem for security-scoped access.
-
-### `SessionLayout`
-
-- `.unixLike` (default): creates `/home/user`, `/bin`, `/usr/bin`, `/tmp`; starts in `/home/user`
-- `.rootOnly`: minimal root-only layout
-
-## How It Works
-
-Execution pipeline:
-1. Command line is lexed and parsed into a shell AST.
-2. Variables/globs are expanded.
-3. Pipelines/chains execute against registered in-process built-ins.
-4. The session state is updated (`cwd`, environment, history).
-5. `CommandResult` is returned.
-
-### Supported Shell Features
-
-- Quoting and escaping (`'...'`, `"..."`, `\\`)
-- Pipes: `cmd1 | cmd2`
-- Redirections: `>`, `>>`, `<`, `<<`, `<<-`, `2>`, `2>&1`
-- Command chaining: `&&`, `||`, `;`
-- Background execution: `&` with `jobs`, `fg`, `wait`
-- Command substitution: `$(...)` (including nested forms)
-- Simple `for` loops: `for name in values; do ...; done` (supports trailing redirections)
-- Simple control flow: `if ... then ... else ... fi`, `while ...; do ...; done`
-- Shell functions: `name(){ ...; }` definitions and invocation (persist across `run` calls)
-- Variables: `$VAR`, `${VAR}`, `${VAR:-default}`, `$!` (last background pseudo-PID)
-- Globs: `*`, `?`, `[abc]` (when `enableGlobbing` is true)
-- Command lookup by name and by path-like invocation (`/bin/ls`)
-
-### Not Yet Supported (Shell Language)
-
-- Full positional-parameter semantics (`$0`, `$*`, quoted `$@` parity edge-cases)
-- `if/then/elif/else/fi` advanced forms (`elif`, nested branches parity)
-- `until`
-- Full `for` loop surface (`for ...; do` newline form, omitted `in` list, C-style `for ((...))`)
-- Function features like `local`, `return`, and `function name { ... }` syntax
-- Full POSIX job-control signals/states (`bg`, `disown`, signal forwarding)
+Important notes:
+- Outbound HTTP(S) is disabled by default
+- `permissionHandler` applies after the built-in network policy passes
+- Permission wait time is excluded from `timeout` and run-level wall-clock accounting
+- `curl` / `wget`, `git clone`, and `BashPython` socket connections share the same network policy path
+- `data:` URLs and jailed `file:` URLs do not trigger outbound network checks
 
 ## Filesystem Model
 
-Built-in filesystem options:
-- `ReadWriteFilesystem` (default): rooted at your `rootDirectory`; reads/writes hit disk in that sandboxed root.
-- `InMemoryFilesystem`: virtual tree stored in memory; no file mutations are written to disk.
-- `SandboxFilesystem`: root resolved from container locations, then backed by `ReadWriteFilesystem`.
-- `SecurityScopedFilesystem`: root resolved from security-scoped URL or bookmark, then backed by `ReadWriteFilesystem`.
+Filesystems available via [Workspace](https://github.com/velos/Workspace):
+- `ReadWriteFilesystem`: rooted real disk I/O
+- `InMemoryFilesystem`: fully in-memory tree
+- `OverlayFilesystem`: snapshots an on-disk root into memory; later writes stay in memory
+- `MountableFilesystem`: composes multiple filesystems under virtual mount points
+- `SandboxFilesystem`: container-root chooser (`documents`, `caches`, `temporary`, app group, custom URL)
+- `SecurityScopedFilesystem`: security-scoped URL or bookmark-backed root
 
 Behavior guarantees:
-- All operations are scoped under the filesystem root.
-- For `ReadWriteFilesystem`, symlink escapes outside root are blocked.
-- Built-in command stubs are created under `/bin` and `/usr/bin` inside the selected filesystem.
-- Unsupported platform features are surfaced as runtime `ShellError.unsupported(...)`, while all current package targets still compile.
+- All shell-visible paths are scoped to the configured filesystem root
+- `ReadWriteFilesystem` blocks symlink escapes outside the root
+- Filesystem implementations reject paths containing null bytes
+- Built-in command stubs are created under `/bin` and `/usr/bin` for unix-like layouts
+- Unsupported platform features surface as runtime unsupported errors from `Bash` or `Workspace`
 
-Rootless session init example:
-
-```swift
-let inMemory = SessionOptions(filesystem: InMemoryFilesystem())
-let session = try await BashSession(options: inMemory)
-```
-
-`BashSession.init(options:)` works with filesystems that can self-configure for a session (`SessionConfigurableFilesystem`), such as `InMemoryFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem`.
-
-You can provide a custom filesystem by implementing `ShellFilesystem`.
-
-### Filesystem Platform Matrix
-
-| Filesystem | macOS | iOS | Catalyst | tvOS/watchOS |
-| --- | --- | --- | --- | --- |
-| `ReadWriteFilesystem` | supported | supported | supported | supported |
-| `InMemoryFilesystem` | supported | supported | supported | supported |
-| `SandboxFilesystem` | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) |
-| `SecurityScopedFilesystem` | supported | supported | supported | compiles; throws `ShellError.unsupported` when configured |
-
-### Security-Scoped Bookmark Flow
+Rootless session example:
 
 ```swift
-let store = UserDefaultsBookmarkStore()
-
-// Create from a URL chosen by your app's document flow.
-let fs = try SecurityScopedFilesystem(url: pickedURL, mode: .readWrite)
-try fs.configureForSession()
-try await fs.saveBookmark(id: "workspace", store: store)
-
-// Restore on a later app launch.
-let restored = try await SecurityScopedFilesystem.loadBookmark(
-    id: "workspace",
-    store: store,
-    mode: .readWrite
-)
-
-let session = try await BashSession(
-    options: SessionOptions(filesystem: restored, layout: .rootOnly)
-)
+let options = SessionOptions(filesystem: InMemoryFilesystem(), layout: .unixLike)
+let session = try await BashSession(options: options)
 ```
 
-## Implemented Commands
+## Shell Scope
 
-All implemented commands support `--help`.
+Supported shell features include:
+- Quoting and escaping
+- Pipes
+- Redirections: `>`, `>>`, `<`, `<<`, `<<-`, `2>`, `2>&1`
+- Chaining: `&&`, `||`, `;`
+- Background execution with `jobs`, `fg`, `wait`, `ps`, `kill`
+- Command substitution: `$(...)`
+- Variables and default expansion: `$VAR`, `${VAR}`, `${VAR:-default}`, `$!`
+- Globbing
+- Here-documents
+- Functions and `local`
+- `if` / `elif` / `else`
+- `while`, `until`, `for ... in ...`, and C-style `for ((...))`
+- Path-like command invocation such as `/bin/ls`
 
-### File Operations
+Not supported:
+- A full bash or POSIX shell grammar
+- Host subprocess execution for ordinary commands
+- Full TTY semantics or real OS job control
+- Many advanced bash compatibility edge cases
 
-| Command | Supported Options |
-| --- | --- |
-| `cat` | positional files |
-| `cp` | `-R`, `--recursive` |
-| `ln` | `-s`, `--symbolic` |
-| `ls` | `-l`, `-a` |
-| `mkdir` | `-p` |
-| `mv` | positional source/destination |
-| `readlink` | positional path |
-| `rm` | `-r`, `-R`, `-f` |
-| `rmdir` | positional paths |
-| `stat` | positional paths |
-| `touch` | positional paths |
-| `chmod` | `<mode> <paths...>`, `-R`, `--recursive` (octal mode only) |
-| `file` | positional paths |
-| `tree` | optional path, `-a`, `-L <level>` |
-| `diff` | `<left> <right>` |
+## Commands
 
-### Text Processing
+All built-ins support `--help`, and most also support `-h`.
 
-| Command | Supported Options |
-| --- | --- |
-| `grep` | `-E`, `-F`, `-i`, `-v`, `-n`, `-c`, `-l`, `-L`, `-o`, `-w`, `-x`, `-r`, `-e <pattern>`, `-f <file>` (`egrep`, `fgrep` aliases) |
-| `rg` | `-i`, `-S`, `-F`, `-n`, `-l`, `-c`, `-m <num>`, `-w`, `-x`, `-A/-B/-C`, `--hidden`, `--no-ignore`, `--files`, `-e <pattern>`, `-f <file>`, `-g/--glob`, `-t <type>`, `-T <type>` |
-| `head` | `-n`, `--n`, `-c`, `-q`, `-v` |
-| `tail` | `-n`, `--n` (supports `+N`), `-c`, `-q`, `-v` |
-| `wc` | `-l`, `-w`, `-c`, `-m`, `--chars` |
-| `sort` | `-r`, `-n`, `-u`, `-f`, `-c`, `-k <field>`, `-o <file>` |
-| `uniq` | `-c`, `-d`, `-u`, `-i`; optional `[input [output]]` operands |
-| `cut` | `-d <delimiter>`, `-f <list>`, `-c <list>`, `-s` (`list`: `N`, `N-M`, `-M`, `N-`) |
-| `tr` | `-d`, `-s`, `-c`; supports escapes (`\\n`, `\\t`, `\\r`) and ranges (`a-z`) |
-| `awk` | `-F <separator>`; supports `{print}`, `{print $N}`, `/regex/ {print ...}` |
-| `sed` | substitution scripts only: `s/pattern/replacement/` and `s/.../.../g` |
-| `xargs` | `-I <replace>`, `-d <delim>`, `-n <max-args>`, `-L/--max-lines <num>`, `-E/--eof <str>`, `-P <max-procs>`, `-0/--null`, `-t/--verbose`, `-r/--no-run-if-empty`; default command `echo` |
-| `printf` | format string + positional values (`%s`, `%d`, `%i`, `%f`, `%%`) |
-| `base64` | encode by default; `-d`, `--decode` |
-| `sha256sum` | optional files (or stdin) |
-| `sha1sum` | optional files (or stdin) |
-| `md5sum` | optional files (or stdin) |
+Core built-in coverage includes:
+- File operations: `cat`, `cp`, `ln`, `ls`, `mkdir`, `mv`, `readlink`, `rm`, `rmdir`, `stat`, `touch`, `chmod`, `file`, `tree`, `diff`
+- Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `xargs`, `printf`, `base64`, `sha256sum`, `sha1sum`, `md5sum`
+- Data tools: `jq`, `yq`, `xan`
+- Compression and archives: `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
+- Navigation and environment: `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`
+- Utilities: `clear`, `date`, `false`, `fg`, `help`, `history`, `jobs`, `kill`, `ps`, `seq`, `sleep`, `time`, `timeout`, `true`, `wait`, `whoami`, `which`
+- Network commands: `curl`, `wget`, `html-to-markdown`
 
-### Data Processing
-
-| Command | Supported Options |
-| --- | --- |
-| `sqlite3` | **Opt-in via `BashSQLite`**: modes `-list`, `-csv`, `-json`, `-line`, `-column`, `-table`, `-markdown`; `-header`, `-noheader`, `-separator <sep>`, `-newline <nl>`, `-nullvalue <str>`, `-readonly`, `-bail`, `-cmd <sql>`, `-version`, `--`; syntax `sqlite3 [options] [database] [sql]` |
-| `python3` / `python` | **Opt-in via `BashPython`**: embedded CPython runtime (`python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]`); supports `-c`, `-m`, `-V/--version`, stdin execution, and script/module execution against strict shell-filesystem shims (process/FFI escape APIs blocked) |
-| `secrets` / `secret` | **Opt-in via `BashSecrets`**: `put`, `ref`, `get`, `delete`, `run`; Keychain generic-password backend with reference-first flows (`secretref:v1:...`) and explicit `get --reveal` for plaintext output |
-| `jq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files. Query subset supports paths, `|`, `select(...)`, comparisons, `and`/`or`/`not`, `//` |
-| `yq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files (YAML + JSON input), same query subset as `jq` |
-| `xan` | subcommands: `count`, `headers`, `select`, `filter` |
-
-### Compression & Archives
-
-| Command | Supported Options |
-| --- | --- |
-| `gzip` | `-d`, `--decompress`, `-c`, `-k`, `-f` |
-| `gunzip` | `-c`, `-k`, `-f` |
-| `zcat` | positional files (or stdin) |
-| `zip` | `-r`, `-0`, `--store`; `zip <archive.zip> <paths...>` |
-| `unzip` | `-l`, `-p`, `-o`, `-d <dir>` |
-| `tar` | `-c`, `-x`, `-t`, `-z`, `-f <archive>`, `-C <dir>` |
-
-### Navigation & Environment
-
-| Command | Supported Options |
-| --- | --- |
-| `basename` | positional names; `-a`, `-s <suffix>` |
-| `cd` | optional positional path |
-| `dirname` | positional paths |
-| `du` | `-s` |
-| `echo` | `-n` |
-| `env` | none |
-| `export` | positional `KEY=VALUE` assignments |
-| `find` | paths + expression subset: `-name/-iname`, `-path/-ipath`, `-regex/-iregex`, `-type`, `-mtime`, `-size`, `-perm`, `-maxdepth/-mindepth`, `-a/-o/!` with grouping `(...)`, `-prune`, `-print/-print0/-printf`, `-delete`, `-exec ... \\;` / `-exec ... +` |
-| `hostname` | none |
-| `printenv` | optional positional keys (non-zero if any key is missing) |
-| `pwd` | none |
-| `tee` | `-a` |
-
-### Shell Utilities
-
-| Command | Supported Options |
-| --- | --- |
-| `clear` | none |
-| `date` | `-u` |
-| `false` | none |
-| `fg` | optional job spec (`fg`, `fg %1`) |
-| `help` | optional command name (`help <command>`) |
-| `history` | `-n`, `--n` |
-| `jobs` | none |
-| `kill` | `kill [-s SIGNAL | -SIGNAL] <pid|%job>...`, `kill -l` |
-| `ps` | `ps`, `ps -p <pid[,pid...]>`, compatibility flags `-e`, `-f`, `-a`, `-x`, `aux` |
-| `seq` | `-s <separator>`, `-w`, positional numeric args |
-| `sleep` | positional durations (`NUMBER[SUFFIX]`, suffix: `s`, `m`, `h`, `d`) |
-| `time` | `time <command...>` |
-| `timeout` | `timeout <seconds> <command...>` |
-| `true` | none |
-| `wait` | optional job specs (`wait`, `wait %1`) |
-| `whoami` | none |
-| `which` | `-a`, `-s`, positional command names |
-
-### Network Commands
-
-| Command | Supported Options |
-| --- | --- |
-| `curl` | URL argument; `-s`, `-S`, `-i`, `-I`, `-f`, `-L`, `-v`, `-X <method>`, `-H <header>...`, `-A <ua>`, `-e <referer>`, `-u <user:pass>`, `-b <cookie|@file|file>`, `-c <cookie-jar-file>`, `-d/--data <value>...`, `--data-raw <value>...`, `--data-binary <value>...`, `--data-urlencode <value>...`, `-T <file>`, `-F <name=value|name=@file>`, `-o <file>`, `-O`, `-w <format>`, `-m <seconds>`, `--connect-timeout <seconds>`, `--max-redirs <count>`; supports `data:`, `file:`, and HTTP(S) URLs (`file:` is scoped to the shell filesystem root) |
-| `wget` | URL argument; `--version`, `-q/--quiet`, `-O/--output-document <file>`, `--user-agent <ua>` |
-| `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
-
-When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
-
-## Command Behaviors and Notes
-
-- Unknown commands return exit code `127` and write `command not found` to `stderr`.
-- Non-zero command exits are returned in `CommandResult.exitCode` (not thrown).
-- `BashSession.init` can throw; `run` always returns `CommandResult` (including parser/runtime failures with exit code `2`).
-- Pipelines are currently sequential and buffered (`stdout` from one command becomes `stdin` for the next command).
-
-## Eval Runner and Profiles
-
-`BashEvalRunner` executes NL shell tasks from YAML task banks and validates results with deterministic shell checks.
-Use it to compare Bash.swift against system bash and track parser/command parity over time.
-
-Primary eval docs live in `docs/evals/README.md`.
-
-Profiles:
-- `docs/evals/general/profile.yaml`: broad command and workflow cross-section with `core` and `gap-probe` tiers.
-- `docs/evals/language-deep/profile.yaml`: shell-language stress profile for command substitution, `for` loops, functions, redirection edges, and control-flow probes.
-
-Build runner:
-
-```bash
-swift build --target BashEvalRunner
-```
-
-Run `general` with static command plans:
-
-```bash
-swift run BashEvalRunner \
-  --profile docs/evals/general/profile.yaml \
-  --engine bashswift \
-  --commands-file docs/evals/examples/commands.json \
-  --report /tmp/bash-eval-report.json
-```
-
-Run `language-deep` with static command plans:
-
-```bash
-swift run BashEvalRunner \
-  --profile docs/evals/language-deep/profile.yaml \
-  --engine bashswift \
-  --commands-file docs/evals/language-deep/commands.json \
-  --report /tmp/bash-language-deep-report.json
-```
-
-Run with an external planner command:
-
-```bash
-swift run BashEvalRunner \
-  --profile docs/evals/general/profile.yaml \
-  --engine bashswift \
-  --agent-command './scripts/plan_commands.sh' \
-  --report /tmp/bash-eval-report.json
-```
+Optional command sets:
+- `sqlite3` via `BashSQLite`
+- `python3` / `python` via `BashPython`
+- `git` via `BashGit`
+- `secrets` / `secret` via `BashSecrets`
 
 ## Testing
+
+Run the test suite with:
 
 ```bash
 swift test
 ```
 
-The project currently includes parser, filesystem, integration, and command coverage tests.
-
-## Roadmap
-
-### Priority (next)
-1. `curl` advanced parity: cookie-jar/edge parsing, multipart/upload depth, verbose/error-code alignment
-2. `xargs` advanced GNU parity: size limits, prompt mode, delimiter/empty-input edge semantics
-3. `html-to-markdown` robustness: malformed HTML recovery and richer table semantics (`colspan`/`rowspan`/alignment)
-4. `sqlite3` advanced parity: `-box`, `-html`, `-quote`, `-tabs`, dot-commands, and shell-level compatibility polish
-
-### Deferred for later milestones
-- `git` parity expansion
-- query engine parity expansion for `jq` / `yq` (functions, assignments, richer streaming behavior)
-- command edge-case parity for file utilities (`cp`, `mv`, `ln`, `readlink`, `touch`)
-- `python3` advanced parity (broader CLI flags, richer stdlib/package parity, hardening and execution controls)
+The repository includes parser, filesystem, integration, command coverage, and optional-module tests.

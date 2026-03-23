@@ -2,14 +2,7 @@ import ArgumentParser
 import Foundation
 import Bash
 
-public struct SecretsCommand: BuiltinCommand {
-    public struct Options: ParsableArguments {
-        @Argument(parsing: .captureForPassthrough, help: "Subcommand")
-        public var arguments: [String] = []
-
-        public init() {}
-    }
-
+public struct SecretsCommand {
     public static let name = "secrets"
     public static let aliases = ["secret"]
     public static let overview = "Manage keychain-backed secrets using opaque references"
@@ -21,39 +14,50 @@ public struct SecretsCommand: BuiltinCommand {
 
     SUBCOMMANDS:
       put      Store or update a secret and emit a secret reference
-      ref      Emit a secret reference for an existing secret
       get      Read secret metadata, or reveal value with --reveal
-      delete   Delete a secret by locator or reference
+      delete   Delete a secret by reference
       run      Resolve references into env vars for one command
 
     NOTES:
-      - References look like secretref:v1:...
+      - References look like secretref:...
       - Prefer 'put --stdin' to avoid putting secrets in command history.
       - 'get' does not reveal secret values unless --reveal is passed.
 
     """
 
-    public static func run(context: inout CommandContext, options: Options) async -> Int32 {
-        guard let subcommand = options.arguments.first else {
+    public static func command(provider: any SecretsProvider) -> AnyBuiltinCommand {
+        AnyBuiltinCommand(
+            name: name,
+            aliases: aliases,
+            overview: overview
+        ) { context, args in
+            await run(context: &context, arguments: args, provider: provider)
+        }
+    }
+
+    private static func run(
+        context: inout CommandContext,
+        arguments: [String],
+        provider: any SecretsProvider
+    ) async -> Int32 {
+        guard let subcommand = arguments.first else {
             context.writeStdout(helpText)
             return 0
         }
 
-        let args = Array(options.arguments.dropFirst())
+        let args = Array(arguments.dropFirst())
         switch subcommand {
         case "help", "--help", "-h":
             context.writeStdout(helpText)
             return 0
         case "put":
-            return await runPut(context: &context, arguments: args)
-        case "ref":
-            return await runRef(context: &context, arguments: args)
+            return await runPut(context: &context, arguments: args, provider: provider)
         case "get":
-            return await runGet(context: &context, arguments: args)
+            return await runGet(context: &context, arguments: args, provider: provider)
         case "delete", "rm":
-            return await runDelete(context: &context, arguments: args)
+            return await runDelete(context: &context, arguments: args, provider: provider)
         case "run":
-            return await runWithSecrets(context: &context, arguments: args)
+            return await runWithSecrets(context: &context, arguments: args, provider: provider)
         default:
             context.writeStderr("secrets: unknown subcommand '\(subcommand)'\n")
             context.writeStderr("secrets: run 'secrets --help' for usage\n")
@@ -89,32 +93,9 @@ private extension SecretsCommand {
         var json = false
     }
 
-    struct RefOptions: ParsableArguments {
-        @Option(name: [.short, .long], help: "Service name")
-        var service: String
-
-        @Option(name: [.customShort("a"), .long], help: "Account name")
-        var account: String
-
-        @Option(name: [.customLong("keychain")], help: "Optional keychain routing metadata")
-        var keychain: String?
-
-        @Flag(name: [.customLong("json")], help: "Emit JSON output")
-        var json = false
-    }
-
     struct GetOptions: ParsableArguments {
-        @Argument(help: "Optional secret reference (secretref:v1:...)")
+        @Argument(help: "Secret reference (secretref:...)")
         var reference: String?
-
-        @Option(name: [.short, .long], help: "Service name")
-        var service: String?
-
-        @Option(name: [.customShort("a"), .long], help: "Account name")
-        var account: String?
-
-        @Option(name: [.customLong("keychain")], help: "Optional keychain routing metadata")
-        var keychain: String?
 
         @Flag(name: [.customShort("w"), .customLong("reveal")], help: "Reveal and print secret value")
         var reveal = false
@@ -124,17 +105,8 @@ private extension SecretsCommand {
     }
 
     struct DeleteOptions: ParsableArguments {
-        @Argument(help: "Optional secret reference (secretref:v1:...)")
+        @Argument(help: "Secret reference (secretref:...)")
         var reference: String?
-
-        @Option(name: [.short, .long], help: "Service name")
-        var service: String?
-
-        @Option(name: [.customShort("a"), .long], help: "Account name")
-        var account: String?
-
-        @Option(name: [.customLong("keychain")], help: "Optional keychain routing metadata")
-        var keychain: String?
 
         @Flag(name: [.short, .long], help: "Succeed when secret is missing")
         var force = false
@@ -150,14 +122,18 @@ private extension SecretsCommand {
         var command: [String]
     }
 
-    static func runPut(context: inout CommandContext, arguments: [String]) async -> Int32 {
+    static func runPut(
+        context: inout CommandContext,
+        arguments: [String],
+        provider: any SecretsProvider
+    ) async -> Int32 {
         if arguments == ["--help"] || arguments == ["-h"] {
             context.writeStdout(
                 """
                 OVERVIEW: Store or update a secret and emit a secret reference
-                
+
                 USAGE: secrets put --service <service> --account <account> [--stdin | --value <value>] [--update] [--json]
-                
+
                 """
             )
             return 0
@@ -180,9 +156,9 @@ private extension SecretsCommand {
             return emitError(context: &context, error: error)
         }
 
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
+        let reference: String
         do {
-            try await runtime.putGenericPassword(
+            reference = try await provider.putGenericPassword(
                 locator: locator,
                 value: value,
                 label: options.label,
@@ -192,7 +168,6 @@ private extension SecretsCommand {
             return emitError(context: &context, error: error)
         }
 
-        let reference = SecretReference(locator: locator).stringValue
         if options.json {
             let payload = PutPayload(
                 reference: reference,
@@ -208,59 +183,18 @@ private extension SecretsCommand {
         return 0
     }
 
-    static func runRef(context: inout CommandContext, arguments: [String]) async -> Int32 {
-        if arguments == ["--help"] || arguments == ["-h"] {
-            context.writeStdout(
-                """
-                OVERVIEW: Emit a secret reference for an existing secret
-                
-                USAGE: secrets ref --service <service> --account <account> [--json]
-                
-                """
-            )
-            return 0
-        }
-
-        guard let options: RefOptions = parse(RefOptions.self, arguments: arguments, context: &context) else {
-            return 2
-        }
-
-        let locator = SecretLocator(
-            service: options.service,
-            account: options.account,
-            keychain: options.keychain
-        )
-
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-        do {
-            _ = try await runtime.getGenericPassword(locator: locator, revealValue: false)
-        } catch {
-            return emitError(context: &context, error: error)
-        }
-
-        let reference = SecretReference(locator: locator).stringValue
-        if options.json {
-            let payload = ReferencePayload(
-                reference: reference,
-                service: locator.service,
-                account: locator.account,
-                keychain: locator.keychain
-            )
-            return writeJSON(payload, context: &context)
-        }
-
-        context.writeStdout(reference + "\n")
-        return 0
-    }
-
-    static func runGet(context: inout CommandContext, arguments: [String]) async -> Int32 {
+    static func runGet(
+        context: inout CommandContext,
+        arguments: [String],
+        provider: any SecretsProvider
+    ) async -> Int32 {
         if arguments == ["--help"] || arguments == ["-h"] {
             context.writeStdout(
                 """
                 OVERVIEW: Read secret metadata, or reveal value with --reveal
-                
-                USAGE: secrets get [<secretref>] [--service <service> --account <account>] [--reveal] [--json]
-                
+
+                USAGE: secrets get <secretref> [--reveal] [--json]
+
                 """
             )
             return 0
@@ -282,24 +216,17 @@ private extension SecretsCommand {
                 error: SecretsError.invalidInput("get --reveal is blocked by strict secret policy")
             )
         }
-
-        let locator: SecretLocator
-        do {
-            locator = try resolveLocator(
-                reference: options.reference,
-                service: options.service,
-                account: options.account,
-                keychain: options.keychain
+        guard let reference = options.reference, !reference.isEmpty else {
+            return emitError(
+                context: &context,
+                error: SecretsError.invalidInput("missing <secretref>")
             )
-        } catch {
-            return emitError(context: &context, error: error)
         }
 
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
         let fetched: SecretFetchResult
         do {
-            fetched = try await runtime.getGenericPassword(
-                locator: locator,
+            fetched = try await provider.getGenericPassword(
+                reference: reference,
                 revealValue: options.reveal
             )
         } catch {
@@ -311,13 +238,12 @@ private extension SecretsCommand {
                 return emitError(
                     context: &context,
                     error: SecretsError.runtimeFailure(
-                        "secret value missing for service '\(locator.service)' and account '\(locator.account)'"
+                        "secret value missing for service '\(fetched.metadata.locator.service)' and account '\(fetched.metadata.locator.account)'"
                     )
                 )
             }
 
             if context.secretPolicy != .off {
-                let reference = SecretReference(locator: fetched.metadata.locator).stringValue
                 await context.registerSensitiveValue(
                     value,
                     replacement: Data(reference.utf8)
@@ -328,7 +254,6 @@ private extension SecretsCommand {
             return 0
         }
 
-        let reference = SecretReference(locator: fetched.metadata.locator).stringValue
         if options.json {
             let payload = GetPayload(
                 reference: reference,
@@ -349,14 +274,18 @@ private extension SecretsCommand {
         return 0
     }
 
-    static func runDelete(context: inout CommandContext, arguments: [String]) async -> Int32 {
+    static func runDelete(
+        context: inout CommandContext,
+        arguments: [String],
+        provider: any SecretsProvider
+    ) async -> Int32 {
         if arguments == ["--help"] || arguments == ["-h"] {
             context.writeStdout(
                 """
-                OVERVIEW: Delete a secret by locator or reference
-                
-                USAGE: secrets delete [<secretref>] [--service <service> --account <account>] [--force]
-                
+                OVERVIEW: Delete a secret by reference
+
+                USAGE: secrets delete <secretref> [--force]
+
                 """
             )
             return 0
@@ -365,24 +294,20 @@ private extension SecretsCommand {
         guard let options: DeleteOptions = parse(DeleteOptions.self, arguments: arguments, context: &context) else {
             return 2
         }
-
-        let locator: SecretLocator
-        do {
-            locator = try resolveLocator(
-                reference: options.reference,
-                service: options.service,
-                account: options.account,
-                keychain: options.keychain
+        guard let reference = options.reference, !reference.isEmpty else {
+            return emitError(
+                context: &context,
+                error: SecretsError.invalidInput("missing <secretref>")
             )
-        } catch {
-            return emitError(context: &context, error: error)
         }
 
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
         do {
-            let removed = try await runtime.deleteGenericPassword(locator: locator)
+            let removed = try await provider.deleteReference(reference)
             if !removed, !options.force {
-                return emitError(context: &context, error: SecretsError.notFound(locator))
+                return emitError(
+                    context: &context,
+                    error: SecretsError.runtimeFailure("secret not found for reference '\(reference)'")
+                )
             }
             return 0
         } catch {
@@ -390,14 +315,18 @@ private extension SecretsCommand {
         }
     }
 
-    static func runWithSecrets(context: inout CommandContext, arguments: [String]) async -> Int32 {
+    static func runWithSecrets(
+        context: inout CommandContext,
+        arguments: [String],
+        provider: any SecretsProvider
+    ) async -> Int32 {
         if arguments == ["--help"] || arguments == ["-h"] {
             context.writeStdout(
                 """
                 OVERVIEW: Resolve references into env vars for one command
-                
+
                 USAGE: secrets run --env NAME=<secretref> [--env NAME=<secretref> ...] -- <command> [args...]
-                
+
                 """
             )
             return 0
@@ -413,42 +342,14 @@ private extension SecretsCommand {
         var ephemeralEnvironment = context.environment
         for binding in invocation.bindings {
             let data: Data
-            if context.secretPolicy == .off {
-                let locator: SecretLocator
-                guard let reference = SecretReference(string: binding.reference) else {
-                    return emitError(
-                        context: &context,
-                        error: SecretsError.invalidReference(binding.reference)
-                    )
-                }
-                locator = reference.locator
-
-                let fetched: SecretFetchResult
-                do {
-                    let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-                    fetched = try await runtime.getGenericPassword(
-                        locator: locator,
-                        revealValue: true
-                    )
-                } catch {
-                    return emitError(context: &context, error: error)
-                }
-
-                guard let value = fetched.value else {
-                    return emitError(
-                        context: &context,
-                        error: SecretsError.runtimeFailure(
-                            "secret value missing for service '\(locator.service)' and account '\(locator.account)'"
-                        )
-                    )
-                }
-                data = value
-            } else {
-                do {
+            do {
+                if context.secretPolicy == .off {
+                    data = try await provider.resolveReference(binding.reference)
+                } else {
                     data = try await context.resolveSecretReference(binding.reference)
-                } catch {
-                    return emitError(context: &context, error: error)
                 }
+            } catch {
+                return emitError(context: &context, error: error)
             }
 
             guard let value = String(data: data, encoding: .utf8) else {
@@ -512,34 +413,6 @@ private extension SecretsCommand {
         }
 
         throw SecretsError.invalidInput("missing secret value (pass --stdin or --value)")
-    }
-
-    static func resolveLocator(
-        reference: String?,
-        service: String?,
-        account: String?,
-        keychain: String?
-    ) throws -> SecretLocator {
-        if let reference {
-            if service != nil || account != nil || keychain != nil {
-                throw SecretsError.invalidInput(
-                    "reference and explicit --service/--account/--keychain cannot be combined"
-                )
-            }
-
-            guard let parsed = SecretReference(string: reference)?.locator else {
-                throw SecretsError.invalidReference(reference)
-            }
-            return parsed
-        }
-
-        guard let service, !service.isEmpty else {
-            throw SecretsError.invalidInput("missing --service")
-        }
-        guard let account, !account.isEmpty else {
-            throw SecretsError.invalidInput("missing --account")
-        }
-        return SecretLocator(service: service, account: account, keychain: keychain)
     }
 
     static func parseRunInvocation(_ arguments: [String]) throws -> RunInvocation {
@@ -659,13 +532,6 @@ private extension SecretsCommand {
         var account: String
         var keychain: String?
         var updated: Bool
-    }
-
-    struct ReferencePayload: Encodable {
-        var reference: String
-        var service: String
-        var account: String
-        var keychain: String?
     }
 
     struct GetPayload: Encodable {

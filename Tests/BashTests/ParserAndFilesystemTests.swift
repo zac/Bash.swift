@@ -182,6 +182,16 @@ struct ParserAndFilesystemTests {
         #expect(read.stderrString.contains("invalid path"))
     }
 
+    @Test("workspace paths reject null bytes")
+    func workspacePathsRejectNullBytes() {
+        do {
+            _ = try WorkspacePath(validating: "/bad\u{0}name")
+            Issue.record("expected workspace path validation to reject null bytes")
+        } catch {
+            #expect("\(error)".contains("null byte"))
+        }
+    }
+
     @Test("command stubs created for path invocation")
     func commandStubsCreatedForPathInvocation() async throws {
         let (session, root) = try await TestSupport.makeSession()

@@ -88,13 +88,15 @@ public struct Python3Command: BuiltinCommand {
             }
 
             let request = PythonExecutionRequest(
+                commandName: context.commandName,
                 mode: invocation.input.executionMode,
                 source: source,
                 scriptPath: scriptPath,
                 arguments: invocation.scriptArgs,
                 currentDirectory: context.currentDirectory,
                 environment: context.environment,
-                stdin: String(decoding: context.stdin, as: UTF8.self)
+                stdin: String(decoding: context.stdin, as: UTF8.self),
+                permissionAuthorizer: context.permissionDelegate
             )
 
             let runtime = await PythonRuntimeRegistry.shared.currentRuntime()

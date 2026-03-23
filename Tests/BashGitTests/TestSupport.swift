@@ -10,19 +10,35 @@ enum GitTestSupport {
         return url
     }
 
-    static func makeReadWriteSession() async throws -> (session: BashSession, root: URL) {
+    static func makeReadWriteSession(
+        networkPolicy: ShellNetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil
+    ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
         let session = try await BashSession(
             rootDirectory: root,
-            options: SessionOptions(filesystem: ReadWriteFilesystem(), layout: .unixLike)
+            options: SessionOptions(
+                filesystem: ReadWriteFilesystem(),
+                layout: .unixLike,
+                networkPolicy: networkPolicy,
+                permissionHandler: permissionHandler
+            )
         )
         await session.registerGit()
         return (session, root)
     }
 
-    static func makeInMemorySession() async throws -> BashSession {
+    static func makeInMemorySession(
+        networkPolicy: ShellNetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil
+    ) async throws -> BashSession {
         let session = try await BashSession(
-            options: SessionOptions(filesystem: InMemoryFilesystem(), layout: .unixLike)
+            options: SessionOptions(
+                filesystem: InMemoryFilesystem(),
+                layout: .unixLike,
+                networkPolicy: networkPolicy,
+                permissionHandler: permissionHandler
+            )
         )
         await session.registerGit()
         return session

@@ -13,6 +13,7 @@ struct SecretsCommandTests {
         let help = await session.run("secrets --help")
         #expect(help.exitCode == 0)
         #expect(help.stdoutString.contains("USAGE: secrets"))
+        #expect(!help.stdoutString.contains("\n  ref"))
 
         let subcommandHelp = await session.run("secrets put --help")
         #expect(subcommandHelp.exitCode == 0)
@@ -35,7 +36,7 @@ struct SecretsCommandTests {
         #expect(put.exitCode == 0)
 
         let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        #expect(reference.hasPrefix("secretref:v1:"))
+        #expect(reference.hasPrefix("secretref:"))
 
         let get = await session.run("secrets get \(reference)")
         #expect(get.exitCode == 0)
@@ -65,24 +66,21 @@ struct SecretsCommandTests {
         #expect(reveal.stdoutString == secret)
     }
 
-    @Test("ref and delete flow")
-    func refAndDeleteFlow() async throws {
+    @Test("delete flow uses references only")
+    func deleteFlowUsesReferencesOnly() async throws {
         let (session, root) = try await SecretsTestSupport.makeSession()
         defer { SecretsTestSupport.removeDirectory(root) }
 
         let service = "svc-\(UUID().uuidString)"
         let account = "acct-\(UUID().uuidString)"
 
-        _ = await session.run(
+        let put = await session.run(
             "secrets put --service \(service) --account \(account)",
             stdin: Data("value".utf8)
         )
+        #expect(put.exitCode == 0)
 
-        let ref = await session.run("secrets ref --service \(service) --account \(account)")
-        #expect(ref.exitCode == 0)
-        let reference = ref.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-        #expect(reference.hasPrefix("secretref:v1:"))
-
+        let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
         let delete = await session.run("secrets delete \(reference)")
         #expect(delete.exitCode == 0)
 
@@ -119,7 +117,7 @@ struct SecretsCommandTests {
         let (session, root) = try await SecretsTestSupport.makeSession()
         defer { SecretsTestSupport.removeDirectory(root) }
 
-        let missingDelimiter = await session.run("secrets run --env API_TOKEN=secretref:v1:abc printenv API_TOKEN")
+        let missingDelimiter = await session.run("secrets run --env API_TOKEN=secretref:abc printenv API_TOKEN")
         #expect(missingDelimiter.exitCode == 2)
         #expect(missingDelimiter.stderrString.contains("expected --env or --"))
 
@@ -128,30 +126,43 @@ struct SecretsCommandTests {
         #expect(missingBinding.stderrString.contains("at least one --env binding"))
     }
 
-    @Test("Secrets API resolves references without shell output")
-    func secretsAPIResolvesReferencesWithoutShellOutput() async throws {
-        await Secrets.setRuntime(InMemorySecretsRuntime.shared)
-
+    @Test("provider API resolves references without shell output")
+    func providerAPIResolvesReferencesWithoutShellOutput() async throws {
+        let provider = InMemorySecretsProvider()
         let service = "svc-\(UUID().uuidString)"
         let account = "acct-\(UUID().uuidString)"
         let secret = Data("api-secret-\(UUID().uuidString)".utf8)
 
-        let reference = try await Secrets.putGenericPassword(
+        let reference = try await provider.putGenericPassword(
             service: service,
             account: account,
             value: secret
         )
-        #expect(reference.hasPrefix("secretref:v1:"))
+        #expect(reference.hasPrefix("secretref:"))
 
-        let metadata = try await Secrets.metadata(forReference: reference)
+        let metadata = try await provider.metadata(forReference: reference)
         #expect(metadata.locator.service == service)
         #expect(metadata.locator.account == account)
 
-        let resolved = try await Secrets.resolveReference(reference)
+        let resolved = try await provider.resolveReference(reference)
         #expect(resolved == secret)
 
-        let deleted = try await Secrets.deleteReference(reference)
+        let deleted = try await provider.deleteReference(reference)
         #expect(deleted)
+    }
+
+    @Test("malformed references are rejected")
+    func malformedReferencesAreRejected() async throws {
+        let (session, root) = try await SecretsTestSupport.makeSession()
+        defer { SecretsTestSupport.removeDirectory(root) }
+
+        let invalidGet = await session.run("secrets get secretref:not-a-valid-reference")
+        #expect(invalidGet.exitCode == 2)
+        #expect(invalidGet.stderrString.contains("invalid secret reference"))
+
+        let invalidDelete = await session.run("secrets delete secretref:###")
+        #expect(invalidDelete.exitCode == 2)
+        #expect(invalidDelete.stderrString.contains("invalid secret reference"))
     }
 
     @Test("strict policy blocks secrets get --reveal")
@@ -190,6 +201,68 @@ struct SecretsCommandTests {
         #expect(!run.stdoutString.contains(secretValue))
     }
 
+    @Test("provider can be shared across sessions for durable refs")
+    func providerCanBeSharedAcrossSessionsForDurableRefs() async throws {
+        let provider = InMemorySecretsProvider()
+        let root1 = try SecretsTestSupport.makeTempDirectory(prefix: "BashSecretsTests-A")
+        let root2 = try SecretsTestSupport.makeTempDirectory(prefix: "BashSecretsTests-B")
+        defer {
+            SecretsTestSupport.removeDirectory(root1)
+            SecretsTestSupport.removeDirectory(root2)
+        }
+
+        let session1 = try await SecretsTestSupport.makeSecretAwareSession(
+            provider: provider,
+            policy: .resolveAndRedact,
+            root: root1
+        )
+        let session2 = try await SecretsTestSupport.makeSecretAwareSession(
+            provider: provider,
+            policy: .resolveAndRedact,
+            root: root2
+        )
+
+        let put = await session1.run(
+            "secrets put --service shared-service --account shared-account",
+            stdin: Data("shared-secret".utf8)
+        )
+        #expect(put.exitCode == 0)
+        let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let get = await session2.run("secrets get \(reference)")
+        #expect(get.exitCode == 0)
+        #expect(get.stdoutString.contains("service=shared-service"))
+    }
+
+    @Test("references are scoped to their provider")
+    func referencesAreScopedToTheirProvider() async throws {
+        let providerA = InMemorySecretsProvider()
+        let providerB = InMemorySecretsProvider()
+        let (sessionA, rootA) = try await SecretsTestSupport.makeSecretAwareSession(
+            provider: providerA,
+            policy: .resolveAndRedact
+        )
+        let (sessionB, rootB) = try await SecretsTestSupport.makeSecretAwareSession(
+            provider: providerB,
+            policy: .resolveAndRedact
+        )
+        defer {
+            SecretsTestSupport.removeDirectory(rootA)
+            SecretsTestSupport.removeDirectory(rootB)
+        }
+
+        let put = await sessionA.run(
+            "secrets put --service scoped-service --account scoped-account",
+            stdin: Data("scoped-secret".utf8)
+        )
+        #expect(put.exitCode == 0)
+        let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let get = await sessionB.run("secrets get \(reference)")
+        #expect(get.exitCode == 2)
+        #expect(get.stderrString.contains("invalid secret reference"))
+    }
+
     @Test("keychain scope keeps service and account entries isolated")
     func keychainScopeKeepsEntriesIsolated() async throws {
         let (session, root) = try await SecretsTestSupport.makeSession()
@@ -218,20 +291,13 @@ struct SecretsCommandTests {
 
         #expect(referenceA != referenceB)
 
-        let getA = await session.run("secrets get --service \(service) --account \(account) --keychain \(keychainA) --reveal")
+        let getA = await session.run("secrets get --reveal \(referenceA)")
         #expect(getA.exitCode == 0)
         #expect(getA.stdoutString == secretA)
 
-        let getB = await session.run("secrets get --service \(service) --account \(account) --keychain \(keychainB) --reveal")
+        let getB = await session.run("secrets get --reveal \(referenceB)")
         #expect(getB.exitCode == 0)
         #expect(getB.stdoutString == secretB)
-
-        let deleteA = await session.run("secrets delete \(referenceA)")
-        #expect(deleteA.exitCode == 0)
-
-        let stillB = await session.run("secrets get \(referenceB) --reveal")
-        #expect(stillB.exitCode == 0)
-        #expect(stillB.stdoutString == secretB)
     }
 
     @Test("json output payloads are structured and complete")
@@ -254,15 +320,7 @@ struct SecretsCommandTests {
         #expect(putPayload.account == account)
         #expect(putPayload.keychain == keychain)
         #expect(!putPayload.updated)
-        #expect(putPayload.reference.hasPrefix("secretref:v1:"))
-
-        let ref = await session.run("secrets ref --service \(service) --account \(account) --keychain \(keychain) --json")
-        #expect(ref.exitCode == 0)
-        let refPayload: ReferenceJSONPayload = try decodeJSON(ref.stdoutString)
-        #expect(refPayload.reference == putPayload.reference)
-        #expect(refPayload.service == service)
-        #expect(refPayload.account == account)
-        #expect(refPayload.keychain == keychain)
+        #expect(putPayload.reference.hasPrefix("secretref:"))
 
         let get = await session.run("secrets get \(putPayload.reference) --json")
         #expect(get.exitCode == 0)
@@ -302,7 +360,7 @@ struct SecretsCommandTests {
         )
         #expect(update.exitCode == 0)
 
-        let reveal = await session.run("secrets get \(reference) --reveal")
+        let reveal = await session.run("secrets get --reveal \(reference)")
         #expect(reveal.exitCode == 0)
         #expect(reveal.stdoutString == "second-value")
 
@@ -317,39 +375,27 @@ struct SecretsCommandTests {
         #expect(missing.stderrString.contains("not found"))
     }
 
-    @Test("invalid or conflicting references return usage failures")
-    func invalidOrConflictingReferencesReturnUsageFailures() async throws {
+    @Test("shell access to existing secrets is ref only")
+    func shellAccessToExistingSecretsIsRefOnly() async throws {
         let (session, root) = try await SecretsTestSupport.makeSession()
         defer { SecretsTestSupport.removeDirectory(root) }
 
-        let invalidGet = await session.run("secrets get secretref:v1:not-a-valid-reference")
-        #expect(invalidGet.exitCode == 2)
-        #expect(invalidGet.stderrString.contains("invalid secret reference"))
+        let get = await session.run("secrets get --service app --account api")
+        #expect(get.exitCode != 0)
+        #expect(get.stderrString.contains("--service"))
 
-        let invalidDelete = await session.run("secrets delete secretref:v1:###")
-        #expect(invalidDelete.exitCode == 2)
-        #expect(invalidDelete.stderrString.contains("invalid secret reference"))
-
-        let put = await session.run(
-            "secrets put --service conflict-service --account conflict-account",
-            stdin: Data("value".utf8)
-        )
-        #expect(put.exitCode == 0)
-        let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
-
-        let conflicting = await session.run(
-            "secrets get \(reference) --service conflict-service --account conflict-account"
-        )
-        #expect(conflicting.exitCode == 2)
-        #expect(conflicting.stderrString.contains("cannot be combined"))
+        let delete = await session.run("secrets delete --service app --account api")
+        #expect(delete.exitCode != 0)
+        #expect(delete.stderrString.contains("--service"))
     }
 
-    @Test("run rejects non-UTF-8 secrets when injecting env vars")
+    @Test("run rejects non-UTF8 secrets when injecting env vars")
     func runRejectsNonUTF8SecretsWhenInjectingEnvVars() async throws {
-        let (session, root) = try await SecretsTestSupport.makeSession()
+        let provider = InMemorySecretsProvider()
+        let (session, root) = try await SecretsTestSupport.makeSession(provider: provider)
         defer { SecretsTestSupport.removeDirectory(root) }
 
-        let reference = try await Secrets.putGenericPassword(
+        let reference = try await provider.putGenericPassword(
             service: "bin-\(UUID().uuidString)",
             account: "blob-\(UUID().uuidString)",
             value: Data([0xFF, 0x00, 0xFE])
@@ -360,8 +406,8 @@ struct SecretsCommandTests {
         #expect(run.stderrString.contains("not UTF-8"))
     }
 
-    @Test("resolve and redact policy covers stderr pipelines and redirections")
-    func resolveAndRedactPolicyCoversStderrPipelinesAndRedirections() async throws {
+    @Test("protected mode redacts caller output but not redirected files")
+    func protectedModeRedactsCallerOutputButNotRedirectedFiles() async throws {
         let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(policy: .resolveAndRedact)
         defer { SecretsTestSupport.removeDirectory(root) }
 
@@ -385,22 +431,49 @@ struct SecretsCommandTests {
 
         let stdoutRedirect = await session.run("secrets run --env TOKEN=\(reference) -- printenv TOKEN > token.txt")
         #expect(stdoutRedirect.exitCode == 0)
+        #expect(stdoutRedirect.stdoutString.isEmpty)
         let tokenFile = await session.run("cat token.txt")
         #expect(tokenFile.exitCode == 0)
-        #expect(tokenFile.stdoutString == "\(reference)\n")
-        #expect(!tokenFile.stdoutString.contains(secretValue))
+        #expect(tokenFile.stdoutString == "\(secretValue)\n")
 
         let stderrRedirect = await session.run("secrets run --env TOKEN=\(reference) -- \(secretValue) 2> error.txt")
         #expect(stderrRedirect.exitCode == 127)
+        #expect(stderrRedirect.stderrString.isEmpty)
         let errorFile = await session.run("cat error.txt")
         #expect(errorFile.exitCode == 0)
-        #expect(errorFile.stdoutString.contains("\(reference): command not found"))
-        #expect(!errorFile.stdoutString.contains(secretValue))
+        #expect(errorFile.stdoutString.contains("\(secretValue): command not found"))
+    }
+
+    @Test("export and expansion keep opaque references")
+    func exportAndExpansionKeepOpaqueReferences() async throws {
+        let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(policy: .resolveAndRedact)
+        defer { SecretsTestSupport.removeDirectory(root) }
+
+        let put = await session.run(
+            "secrets put --service export-service --account export-account",
+            stdin: Data("export-secret".utf8)
+        )
+        #expect(put.exitCode == 0)
+        let reference = put.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let export = await session.run("export TOKEN=\(reference)")
+        #expect(export.exitCode == 0)
+
+        let printenv = await session.run("printenv TOKEN")
+        #expect(printenv.exitCode == 0)
+        #expect(printenv.stdoutString == "\(reference)\n")
+
+        let echo = await session.run("echo $TOKEN")
+        #expect(echo.exitCode == 0)
+        #expect(echo.stdoutString == "\(reference)\n")
     }
 
     @Test("curl resolves secret refs and redacts verbose output")
     func curlResolvesSecretRefsAndRedactsVerboseOutput() async throws {
-        let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(policy: .resolveAndRedact)
+        let (session, root) = try await SecretsTestSupport.makeSecretAwareSession(
+            policy: .resolveAndRedact,
+            networkPolicy: .unrestricted
+        )
         defer { SecretsTestSupport.removeDirectory(root) }
 
         let secretValue = "curl-secret-\(UUID().uuidString)"
@@ -431,13 +504,6 @@ struct SecretsCommandTests {
         var account: String
         var keychain: String?
         var updated: Bool
-    }
-
-    private struct ReferenceJSONPayload: Decodable {
-        var reference: String
-        var service: String
-        var account: String
-        var keychain: String?
     }
 
     private struct GetJSONPayload: Decodable {

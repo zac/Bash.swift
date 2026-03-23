@@ -1,10 +1,64 @@
 import ArgumentParser
 import Foundation
 
+private actor EffectiveWallClock {
+    private let startedAt = ProcessInfo.processInfo.systemUptime
+    private var pausedDuration: TimeInterval = 0
+    private var pauseDepth = 0
+    private var pauseStartedAt: TimeInterval?
+
+    func beginPause() {
+        if pauseDepth == 0 {
+            pauseStartedAt = ProcessInfo.processInfo.systemUptime
+        }
+        pauseDepth += 1
+    }
+
+    func endPause() {
+        guard pauseDepth > 0 else {
+            return
+        }
+
+        pauseDepth -= 1
+        guard pauseDepth == 0, let pauseStartedAt else {
+            return
+        }
+
+        pausedDuration += max(0, ProcessInfo.processInfo.systemUptime - pauseStartedAt)
+        self.pauseStartedAt = nil
+    }
+
+    func elapsed() -> TimeInterval {
+        let now = ProcessInfo.processInfo.systemUptime
+        var effectivePausedDuration = pausedDuration
+        if let pauseStartedAt {
+            effectivePausedDuration += max(0, now - pauseStartedAt)
+        }
+        return max(0, now - startedAt - effectivePausedDuration)
+    }
+}
+
+private actor PermissionPauseAuthorizer: ShellPermissionAuthorizing {
+    private let base: any ShellPermissionAuthorizing
+    private let clock: EffectiveWallClock
+
+    init(base: any ShellPermissionAuthorizing, clock: EffectiveWallClock) {
+        self.base = base
+        self.clock = clock
+    }
+
+    func authorize(_ request: ShellPermissionRequest) async -> ShellPermissionDecision {
+        await clock.beginPause()
+        let decision = await base.authorize(request)
+        await clock.endPause()
+        return decision
+    }
+}
+
 public struct CommandContext: Sendable {
     public let commandName: String
     public let arguments: [String]
-    public let filesystem: any ShellFilesystem
+    public let filesystem: any FileSystem
     public let enableGlobbing: Bool
     public let secretPolicy: SecretHandlingPolicy
     public let secretResolver: (any SecretReferenceResolving)?
@@ -19,11 +73,13 @@ public struct CommandContext: Sendable {
     public var stderr: Data
     let secretTracker: SecretExposureTracker?
     let jobControl: (any ShellJobControlling)?
+    let permissionAuthorizer: any ShellPermissionAuthorizing
+    let executionControl: ExecutionControl?
 
     public init(
         commandName: String,
         arguments: [String],
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         enableGlobbing: Bool,
         secretPolicy: SecretHandlingPolicy = .off,
         secretResolver: (any SecretReferenceResolving)? = nil,
@@ -52,14 +108,16 @@ public struct CommandContext: Sendable {
             stdout: stdout,
             stderr: stderr,
             secretTracker: nil,
-            jobControl: nil
+            jobControl: nil,
+            permissionAuthorizer: ShellPermissionAuthorizer(),
+            executionControl: nil
         )
     }
 
     init(
         commandName: String,
         arguments: [String],
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         enableGlobbing: Bool,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -72,7 +130,9 @@ public struct CommandContext: Sendable {
         stdout: Data = Data(),
         stderr: Data = Data(),
         secretTracker: SecretExposureTracker?,
-        jobControl: (any ShellJobControlling)? = nil
+        jobControl: (any ShellJobControlling)? = nil,
+        permissionAuthorizer: any ShellPermissionAuthorizing = ShellPermissionAuthorizer(),
+        executionControl: ExecutionControl? = nil
     ) {
         self.commandName = commandName
         self.arguments = arguments
@@ -90,6 +150,8 @@ public struct CommandContext: Sendable {
         self.stderr = stderr
         self.secretTracker = secretTracker
         self.jobControl = jobControl
+        self.permissionAuthorizer = permissionAuthorizer
+        self.executionControl = executionControl
     }
 
     public mutating func writeStdout(_ string: String) {
@@ -100,8 +162,12 @@ public struct CommandContext: Sendable {
         stderr.append(Data(string.utf8))
     }
 
-    public func resolvePath(_ path: String) -> String {
-        PathUtils.normalize(path: path, currentDirectory: currentDirectory)
+    public var currentDirectoryPath: WorkspacePath {
+        WorkspacePath(normalizing: currentDirectory)
+    }
+
+    public func resolvePath(_ path: String) -> WorkspacePath {
+        WorkspacePath(normalizing: path, relativeTo: currentDirectoryPath)
     }
 
     public func environmentValue(_ key: String) -> String {
@@ -168,6 +234,32 @@ public struct CommandContext: Sendable {
         return value
     }
 
+    public func requestPermission(
+        _ request: ShellPermissionRequest
+    ) async -> ShellPermissionDecision {
+        await authorizePermissionRequest(
+            request,
+            using: permissionAuthorizer,
+            pausing: executionControl
+        )
+    }
+
+    public func requestNetworkPermission(
+        url: String,
+        method: String
+    ) async -> ShellPermissionDecision {
+        await requestPermission(
+            ShellPermissionRequest(
+                command: commandName,
+                kind: .network(ShellNetworkPermissionRequest(url: url, method: method))
+            )
+        )
+    }
+
+    public var permissionDelegate: any ShellPermissionAuthorizing {
+        permissionAuthorizer
+    }
+
     public mutating func runSubcommand(
         _ argv: [String],
         stdin: Data? = nil
@@ -181,6 +273,19 @@ public struct CommandContext: Sendable {
     public func runSubcommandIsolated(
         _ argv: [String],
         stdin: Data? = nil
+    ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
+        await runSubcommandIsolated(
+            argv,
+            stdin: stdin,
+            executionControlOverride: nil
+        )
+    }
+
+    func runSubcommandIsolated(
+        _ argv: [String],
+        stdin: Data? = nil,
+        executionControlOverride: ExecutionControl?,
+        permissionAuthorizerOverride: (any ShellPermissionAuthorizing)? = nil
     ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
         guard let commandName = argv.first else {
             return (CommandResult(stdout: Data(), stderr: Data(), exitCode: 0), currentDirectory, environment)
@@ -196,10 +301,30 @@ public struct CommandContext: Sendable {
         }
 
         let commandArgs = Array(argv.dropFirst())
+        let effectiveExecutionControl = executionControlOverride ?? executionControl
+        let effectivePermissionAuthorizer = permissionAuthorizerOverride ?? permissionAuthorizer
+        let childFilesystem = ShellPermissionedFileSystem(
+            base: ShellPermissionedFileSystem.unwrap(filesystem),
+            commandName: commandName,
+            permissionAuthorizer: effectivePermissionAuthorizer,
+            executionControl: effectiveExecutionControl
+        )
+        if let failure = await effectiveExecutionControl?.recordCommandExecution(commandName: commandName) {
+            return (
+                CommandResult(
+                    stdout: Data(),
+                    stderr: Data("\(failure.message)\n".utf8),
+                    exitCode: failure.exitCode
+                ),
+                currentDirectory,
+                environment
+            )
+        }
+
         var childContext = CommandContext(
             commandName: commandName,
             arguments: commandArgs,
-            filesystem: filesystem,
+            filesystem: childFilesystem,
             enableGlobbing: enableGlobbing,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
@@ -210,7 +335,9 @@ public struct CommandContext: Sendable {
             environment: environment,
             stdin: stdin ?? self.stdin,
             secretTracker: secretTracker,
-            jobControl: jobControl
+            jobControl: jobControl,
+            permissionAuthorizer: effectivePermissionAuthorizer,
+            executionControl: effectiveExecutionControl
         )
 
         let exitCode = await implementation.runCommand(&childContext, commandArgs)
@@ -221,9 +348,77 @@ public struct CommandContext: Sendable {
         )
     }
 
+    public func runSubcommandIsolated(
+        _ argv: [String],
+        stdin: Data? = nil,
+        wallClockTimeout: TimeInterval
+    ) async -> (result: CommandResult, currentDirectory: String, environment: [String: String]) {
+        let clock = EffectiveWallClock()
+        let wrappedPermissionAuthorizer = PermissionPauseAuthorizer(
+            base: permissionAuthorizer,
+            clock: clock
+        )
+
+        enum Outcome: Sendable {
+            case completed(CommandResult, String, [String: String])
+            case timedOut
+        }
+
+        let task = Task {
+            await runSubcommandIsolated(
+                argv,
+                stdin: stdin,
+                executionControlOverride: executionControl,
+                permissionAuthorizerOverride: wrappedPermissionAuthorizer
+            )
+        }
+
+        let outcome = await withTaskGroup(of: Outcome.self) { group in
+            group.addTask {
+                let sub = await task.value
+                return .completed(sub.result, sub.currentDirectory, sub.environment)
+            }
+
+            group.addTask {
+                while !Task.isCancelled {
+                    let elapsed = await clock.elapsed()
+                    if elapsed >= wallClockTimeout {
+                        return .timedOut
+                    }
+
+                    let remaining = max(0.001, min(wallClockTimeout - elapsed, 0.01))
+                    let sleepNanos = UInt64(remaining * 1_000_000_000)
+                    try? await Task.sleep(nanoseconds: sleepNanos)
+                }
+
+                return .timedOut
+            }
+
+            let first = await group.next() ?? .timedOut
+            group.cancelAll()
+            return first
+        }
+
+        switch outcome {
+        case let .completed(result, currentDirectory, environment):
+            return (result, currentDirectory, environment)
+        case .timedOut:
+            task.cancel()
+            return (
+                CommandResult(
+                    stdout: Data(),
+                    stderr: Data("timeout: command timed out\n".utf8),
+                    exitCode: 124
+                ),
+                currentDirectory,
+                environment
+            )
+        }
+    }
+
     private func resolveCommand(named commandName: String) -> AnyBuiltinCommand? {
         if commandName.hasPrefix("/") {
-            return commandRegistry[PathUtils.basename(commandName)]
+            return commandRegistry[WorkspacePath.basename(commandName)]
         }
 
         if let direct = commandRegistry[commandName] {
@@ -231,7 +426,7 @@ public struct CommandContext: Sendable {
         }
 
         if commandName.contains("/") {
-            return commandRegistry[PathUtils.basename(commandName)]
+            return commandRegistry[WorkspacePath.basename(commandName)]
         }
 
         return nil

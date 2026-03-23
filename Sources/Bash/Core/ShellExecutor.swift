@@ -10,13 +10,14 @@ private struct TextExpansionOutcome: Sendable {
     var text: String
     var stderr: Data
     var error: ShellError?
+    var failure: ExecutionFailure?
 }
 
 enum ShellExecutor {
     static func execute(
         parsedLine: ParsedLine,
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
@@ -24,6 +25,8 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -45,6 +48,12 @@ enum ShellExecutor {
         var lastExitCode: Int32 = 0
 
         for segment in parsedLine.segments {
+            if let failure = await executionControl?.checkpoint() {
+                lastExitCode = failure.exitCode
+                aggregateErr.append(Data("\(failure.message)\n".utf8))
+                break
+            }
+
             if shouldSkipSegment(connector: segment.connector, previousExitCode: lastExitCode) {
                 continue
             }
@@ -79,6 +88,8 @@ enum ShellExecutor {
                             shellFunctions: shellFunctions,
                             enableGlobbing: backgroundEnableGlobbing,
                             jobControl: nil,
+                            permissionAuthorizer: permissionAuthorizer,
+                            executionControl: executionControl,
                             secretPolicy: backgroundSecretPolicy,
                             secretResolver: backgroundSecretResolver,
                             secretTracker: localTracker,
@@ -114,6 +125,8 @@ enum ShellExecutor {
                 shellFunctions: shellFunctions,
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -150,7 +163,7 @@ enum ShellExecutor {
     private static func executePipeline(
         commands: [ParsedCommand],
         initialInput: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -158,6 +171,8 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -179,6 +194,8 @@ enum ShellExecutor {
                 shellFunctions: shellFunctions,
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -198,7 +215,7 @@ enum ShellExecutor {
     private static func executeSingleCommand(
         _ command: ParsedCommand,
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -206,11 +223,32 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
         secretOutputRedactor: any SecretOutputRedacting
     ) async -> CommandResult {
+        if let failure = await executionControl?.checkpoint() {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(failure.message)\n".utf8),
+                exitCode: failure.exitCode
+            )
+        }
+
+        let baseFilesystem = ShellPermissionedFileSystem.unwrap(filesystem)
+        let initialCommandName = command.words.first?.rawValue.isEmpty == false
+            ? command.words.first!.rawValue
+            : "shell"
+        let expansionFilesystem = ShellPermissionedFileSystem(
+            base: baseFilesystem,
+            commandName: initialCommandName,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl
+        )
+
         var input = stdin
         var stderr = Data()
 
@@ -218,19 +256,24 @@ enum ShellExecutor {
             if let hereDocument = redirection.hereDocument {
                 let expandedHereDocument = await expandHereDocumentBody(
                     hereDocument,
-                    filesystem: filesystem,
+                    filesystem: expansionFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     history: history,
                     commandRegistry: commandRegistry,
                     shellFunctions: shellFunctions,
                     enableGlobbing: enableGlobbing,
+                    permissionAuthorizer: permissionAuthorizer,
+                    executionControl: executionControl,
                     secretPolicy: secretPolicy,
                     secretResolver: secretResolver,
                     secretTracker: secretTracker,
                     secretOutputRedactor: secretOutputRedactor
                 )
                 stderr.append(expandedHereDocument.stderr)
+                if let failure = expandedHereDocument.failure {
+                    return CommandResult(stdout: Data(), stderr: stderr, exitCode: failure.exitCode)
+                }
                 if let error = expandedHereDocument.error {
                     stderr.append(Data("\(error)\n".utf8))
                     return CommandResult(stdout: Data(), stderr: stderr, exitCode: 2)
@@ -242,14 +285,16 @@ enum ShellExecutor {
             guard let targetWord = redirection.target else { continue }
             let target = await firstExpansion(
                 word: targetWord,
-                filesystem: filesystem,
+                filesystem: expansionFilesystem,
                 currentDirectory: currentDirectory,
                 environment: environment,
                 enableGlobbing: enableGlobbing
             )
 
             do {
-                input = try await filesystem.readFile(path: PathUtils.normalize(path: target, currentDirectory: currentDirectory))
+                input = try await expansionFilesystem.readFile(
+                    path: WorkspacePath(normalizing: target, relativeTo: WorkspacePath(normalizing: currentDirectory))
+                )
             } catch {
                 stderr.append(Data("\(target): \(error)\n".utf8))
                 return CommandResult(stdout: Data(), stderr: stderr, exitCode: 1)
@@ -258,7 +303,7 @@ enum ShellExecutor {
 
         let expandedWords = await expandWords(
             command.words,
-            filesystem: filesystem,
+            filesystem: expansionFilesystem,
             currentDirectory: currentDirectory,
             environment: environment,
             enableGlobbing: enableGlobbing
@@ -269,6 +314,12 @@ enum ShellExecutor {
         }
 
         let commandArgs = Array(expandedWords.dropFirst())
+        let commandFilesystem = ShellPermissionedFileSystem(
+            base: baseFilesystem,
+            commandName: commandName,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl
+        )
 
         var result: CommandResult
         if commandArgs.isEmpty, let assignment = parseAssignment(commandName) {
@@ -277,10 +328,18 @@ enum ShellExecutor {
         } else if commandName == "local" {
             result = executeLocalBuiltin(commandArgs, environment: &environment)
         } else if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
+            if let failure = await executionControl?.recordCommandExecution(commandName: commandName) {
+                return CommandResult(
+                    stdout: Data(),
+                    stderr: Data("\(failure.message)\n".utf8),
+                    exitCode: failure.exitCode
+                )
+            }
+
             var context = CommandContext(
                 commandName: commandName,
                 arguments: commandArgs,
-                filesystem: filesystem,
+                filesystem: commandFilesystem,
                 enableGlobbing: enableGlobbing,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
@@ -291,7 +350,9 @@ enum ShellExecutor {
                 environment: environment,
                 stdin: input,
                 secretTracker: secretTracker,
-                jobControl: jobControl
+                jobControl: jobControl,
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl
             )
 
             let exitCode = await implementation.runCommand(&context, commandArgs)
@@ -307,7 +368,7 @@ enum ShellExecutor {
                 functionBody,
                 functionArguments: commandArgs,
                 stdin: input,
-                filesystem: filesystem,
+                filesystem: baseFilesystem,
                 currentDirectory: &currentDirectory,
                 environment: &environment,
                 history: history,
@@ -315,6 +376,8 @@ enum ShellExecutor {
                 shellFunctions: shellFunctions,
                 enableGlobbing: enableGlobbing,
                 jobControl: jobControl,
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
                 secretPolicy: secretPolicy,
                 secretResolver: secretResolver,
                 secretTracker: secretTracker,
@@ -331,22 +394,20 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
-                    let redactedOutput = await redactForExternalOutput(
-                        result.stdout,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
-                    try await filesystem.writeFile(
+                    try await commandFilesystem.writeFile(
                         path: path,
-                        data: redactedOutput,
+                        data: result.stdout,
                         append: redirection.type == .stdoutAppend
                     )
                     result.stdout.removeAll(keepingCapacity: true)
@@ -358,22 +419,20 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
-                    let redactedStderr = await redactForExternalOutput(
-                        result.stderr,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
-                    try await filesystem.writeFile(
+                    try await commandFilesystem.writeFile(
                         path: path,
-                        data: redactedStderr,
+                        data: result.stderr,
                         append: redirection.type == .stderrAppend
                     )
                     result.stderr.removeAll(keepingCapacity: true)
@@ -388,28 +447,21 @@ enum ShellExecutor {
                 guard let targetWord = redirection.target else { continue }
                 let target = await firstExpansion(
                     word: targetWord,
-                    filesystem: filesystem,
+                    filesystem: commandFilesystem,
                     currentDirectory: currentDirectory,
                     environment: environment,
                     enableGlobbing: enableGlobbing
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
-                    let redactedStdout = await redactForExternalOutput(
-                        result.stdout,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
-                    )
-                    let redactedStderr = await redactForExternalOutput(
-                        result.stderr,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
                     var combined = Data()
-                    combined.append(redactedStdout)
-                    combined.append(redactedStderr)
-                    try await filesystem.writeFile(
+                    combined.append(result.stdout)
+                    combined.append(result.stderr)
+                    try await commandFilesystem.writeFile(
                         path: path,
                         data: combined,
                         append: redirection.type == .stdoutAndErrAppend
@@ -432,7 +484,7 @@ enum ShellExecutor {
         _ body: String,
         functionArguments: [String],
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -440,6 +492,8 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -453,6 +507,14 @@ enum ShellExecutor {
                 stdout: Data(),
                 stderr: Data("\(error)\n".utf8),
                 exitCode: 2
+            )
+        }
+
+        if let failure = await executionControl?.pushFunction() {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(failure.message)\n".utf8),
+                exitCode: failure.exitCode
             )
         }
 
@@ -477,6 +539,8 @@ enum ShellExecutor {
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
             jobControl: jobControl,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -500,6 +564,8 @@ enum ShellExecutor {
         } else {
             environment[functionDepthKey] = String(previousDepth)
         }
+
+        await executionControl?.popFunction()
 
         return execution.result
     }
@@ -546,7 +612,7 @@ enum ShellExecutor {
 
     private static func resolveCommand(named commandName: String, registry: [String: AnyBuiltinCommand]) -> AnyBuiltinCommand? {
         if commandName.hasPrefix("/") {
-            let base = PathUtils.basename(commandName)
+            let base = WorkspacePath.basename(commandName)
             return registry[base]
         }
 
@@ -555,7 +621,7 @@ enum ShellExecutor {
         }
 
         if commandName.contains("/") {
-            return registry[PathUtils.basename(commandName)]
+            return registry[WorkspacePath.basename(commandName)]
         }
 
         return nil
@@ -727,7 +793,7 @@ enum ShellExecutor {
 
     private static func expandWords(
         _ words: [ShellWord],
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -750,7 +816,7 @@ enum ShellExecutor {
 
     private static func firstExpansion(
         word: ShellWord,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -767,7 +833,7 @@ enum ShellExecutor {
 
     private static func expandWord(
         _ word: ShellWord,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -783,13 +849,16 @@ enum ShellExecutor {
             }
         }
 
-        guard enableGlobbing, word.hasUnquotedWildcard, PathUtils.containsGlob(combined) else {
+        guard enableGlobbing, word.hasUnquotedWildcard, WorkspacePath.containsGlob(combined) else {
             return [combined]
         }
 
         do {
-            let matches = try await filesystem.glob(pattern: combined, currentDirectory: currentDirectory)
-            return matches.isEmpty ? [combined] : matches
+            let matches = try await filesystem.glob(
+                pattern: combined,
+                currentDirectory: WorkspacePath(normalizing: currentDirectory)
+            )
+            return matches.isEmpty ? [combined] : matches.map(\.string)
         } catch {
             return [combined]
         }
@@ -904,13 +973,15 @@ enum ShellExecutor {
 
     private static func expandHereDocumentBody(
         _ hereDocument: HereDocument,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -920,7 +991,8 @@ enum ShellExecutor {
             return TextExpansionOutcome(
                 text: hereDocument.body,
                 stderr: Data(),
-                error: nil
+                error: nil,
+                failure: nil
             )
         }
 
@@ -933,6 +1005,8 @@ enum ShellExecutor {
             commandRegistry: commandRegistry,
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -942,13 +1016,15 @@ enum ShellExecutor {
 
     private static func expandUnquotedHereDocumentText(
         _ text: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -974,6 +1050,15 @@ enum ShellExecutor {
         }
 
         while index < text.endIndex {
+            if let failure = await executionControl?.checkpoint() {
+                return TextExpansionOutcome(
+                    text: output,
+                    stderr: Data("\(failure.message)\n".utf8),
+                    error: nil,
+                    failure: failure
+                )
+            }
+
             let character = text[index]
 
             if character == "\\" {
@@ -1032,6 +1117,8 @@ enum ShellExecutor {
                         commandRegistry: commandRegistry,
                         shellFunctions: shellFunctions,
                         enableGlobbing: enableGlobbing,
+                        permissionAuthorizer: permissionAuthorizer,
+                        executionControl: executionControl,
                         secretPolicy: secretPolicy,
                         secretResolver: secretResolver,
                         secretTracker: secretTracker,
@@ -1043,7 +1130,16 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: error
+                            error: error,
+                            failure: nil
+                        )
+                    }
+                    if let failure = evaluated.failure {
+                        return TextExpansionOutcome(
+                            text: output,
+                            stderr: stderr,
+                            error: nil,
+                            failure: failure
                         )
                     }
                     index = capture.endIndex
@@ -1052,13 +1148,15 @@ enum ShellExecutor {
                     return TextExpansionOutcome(
                         text: output,
                         stderr: stderr,
-                        error: shellError
+                        error: shellError,
+                        failure: nil
                     )
                 } catch {
                     return TextExpansionOutcome(
                         text: output,
                         stderr: stderr,
-                        error: .parserError("\(error)")
+                        error: .parserError("\(error)"),
+                        failure: nil
                     )
                 }
             }
@@ -1115,19 +1213,22 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: output,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
     private static func expandCommandSubstitutionsInCommandText(
         _ commandLine: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
@@ -1140,6 +1241,15 @@ enum ShellExecutor {
         var pendingHereDocuments: [PendingHereDocumentCapture] = []
 
         while index < commandLine.endIndex {
+            if let failure = await executionControl?.checkpoint() {
+                return TextExpansionOutcome(
+                    text: output,
+                    stderr: Data("\(failure.message)\n".utf8),
+                    error: nil,
+                    failure: failure
+                )
+            }
+
             let character = commandLine[index]
 
             if character == "\\", quote != .single {
@@ -1200,13 +1310,15 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: shellError
+                            error: shellError,
+                            failure: nil
                         )
                     } catch {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: .parserError("\(error)")
+                            error: .parserError("\(error)"),
+                            failure: nil
                         )
                     }
                 }
@@ -1233,6 +1345,8 @@ enum ShellExecutor {
                             commandRegistry: commandRegistry,
                             shellFunctions: shellFunctions,
                             enableGlobbing: enableGlobbing,
+                            permissionAuthorizer: permissionAuthorizer,
+                            executionControl: executionControl,
                             secretPolicy: secretPolicy,
                             secretResolver: secretResolver,
                             secretTracker: secretTracker,
@@ -1244,7 +1358,16 @@ enum ShellExecutor {
                             return TextExpansionOutcome(
                                 text: output,
                                 stderr: stderr,
-                                error: error
+                                error: error,
+                                failure: nil
+                            )
+                        }
+                        if let failure = evaluated.failure {
+                            return TextExpansionOutcome(
+                                text: output,
+                                stderr: stderr,
+                                error: nil,
+                                failure: failure
                             )
                         }
                         index = capture.endIndex
@@ -1253,13 +1376,15 @@ enum ShellExecutor {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: shellError
+                            error: shellError,
+                            failure: nil
                         )
                     } catch {
                         return TextExpansionOutcome(
                             text: output,
                             stderr: stderr,
-                            error: .parserError("\(error)")
+                            error: .parserError("\(error)"),
+                            failure: nil
                         )
                     }
                 }
@@ -1272,24 +1397,36 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: output,
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
     private static func evaluateCommandSubstitutionInCommandText(
         _ command: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
         secretTracker: SecretExposureTracker?,
         secretOutputRedactor: any SecretOutputRedacting
     ) async -> TextExpansionOutcome {
+        if let failure = await executionControl?.pushCommandSubstitution() {
+            return TextExpansionOutcome(
+                text: "",
+                stderr: Data("\(failure.message)\n".utf8),
+                error: nil,
+                failure: failure
+            )
+        }
+
         let nested = await expandCommandSubstitutionsInCommandText(
             command,
             filesystem: filesystem,
@@ -1299,11 +1436,22 @@ enum ShellExecutor {
             commandRegistry: commandRegistry,
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
             secretOutputRedactor: secretOutputRedactor
         )
+        await executionControl?.popCommandSubstitution()
+        if let failure = nested.failure {
+            return TextExpansionOutcome(
+                text: "",
+                stderr: nested.stderr,
+                error: nil,
+                failure: failure
+            )
+        }
         if nested.error != nil {
             return nested
         }
@@ -1315,13 +1463,15 @@ enum ShellExecutor {
             return TextExpansionOutcome(
                 text: "",
                 stderr: nested.stderr,
-                error: shellError
+                error: shellError,
+                failure: nil
             )
         } catch {
             return TextExpansionOutcome(
                 text: "",
                 stderr: nested.stderr,
-                error: .parserError("\(error)")
+                error: .parserError("\(error)"),
+                failure: nil
             )
         }
 
@@ -1336,6 +1486,8 @@ enum ShellExecutor {
             shellFunctions: shellFunctions,
             enableGlobbing: enableGlobbing,
             jobControl: nil,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
             secretPolicy: secretPolicy,
             secretResolver: secretResolver,
             secretTracker: secretTracker,
@@ -1348,7 +1500,8 @@ enum ShellExecutor {
         return TextExpansionOutcome(
             text: trimmingTrailingNewlines(from: execution.result.stdoutString),
             stderr: stderr,
-            error: nil
+            error: nil,
+            failure: nil
         )
     }
 
@@ -1635,23 +1788,4 @@ enum ShellExecutor {
         return nil
     }
 
-    private static func redactForExternalOutput(
-        _ data: Data,
-        secretTracker: SecretExposureTracker?,
-        secretOutputRedactor: any SecretOutputRedacting
-    ) async -> Data {
-        guard let secretTracker else {
-            return data
-        }
-
-        let replacements = await secretTracker.snapshot()
-        guard !replacements.isEmpty else {
-            return data
-        }
-
-        return secretOutputRedactor.redact(
-            data: data,
-            replacements: replacements
-        )
-    }
 }

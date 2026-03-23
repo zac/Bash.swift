@@ -269,11 +269,11 @@ struct GrepCommand: BuiltinCommand {
                         guard !entryInfo.isDirectory else {
                             continue
                         }
-                        if seen.insert(entry).inserted {
-                            targets.append(SearchFileTarget(path: entry, displayPath: entry))
+                        if seen.insert(entry.string).inserted {
+                            targets.append(SearchFileTarget(path: entry, displayPath: entry.string))
                         }
                     }
-                } else if seen.insert(resolved).inserted {
+                } else if seen.insert(resolved.string).inserted {
                     targets.append(SearchFileTarget(path: resolved, displayPath: path))
                 }
             } catch {
@@ -489,12 +489,12 @@ struct RgCommand: BuiltinCommand {
     }
 
     private struct CandidateFile {
-        let path: String
+        let path: WorkspacePath
         let displayPath: String
     }
 
     private static func searchFile(
-        path: String,
+        path: WorkspacePath,
         displayPath: String,
         matcher: SearchMatcher,
         includeLineNumbers: Bool,
@@ -578,7 +578,7 @@ struct RgCommand: BuiltinCommand {
         var hadError = false
 
         let globRegexes: [NSRegularExpression] = globs.compactMap { glob in
-            try? NSRegularExpression(pattern: PathUtils.globToRegex(glob))
+            try? NSRegularExpression(pattern: WorkspacePath.globToRegex(glob))
         }
 
         for root in roots {
@@ -592,30 +592,38 @@ struct RgCommand: BuiltinCommand {
                         guard !entryInfo.isDirectory else {
                             continue
                         }
-                        guard includeHidden || !isHidden(path: entry) else {
+                        guard includeHidden || !isHidden(path: entry.string) else {
                             continue
                         }
-                        guard matchesType(path: entry, includeExtensions: includeExtensions, excludeExtensions: excludeExtensions) else {
+                        guard matchesType(
+                            path: entry.string,
+                            includeExtensions: includeExtensions,
+                            excludeExtensions: excludeExtensions
+                        ) else {
                             continue
                         }
-                        guard matchesGlobs(path: entry, globs: globRegexes) else {
+                        guard matchesGlobs(path: entry.string, globs: globRegexes) else {
                             continue
                         }
-                        if seen.insert(entry).inserted {
-                            result.append(CandidateFile(path: entry, displayPath: entry))
+                        if seen.insert(entry.string).inserted {
+                            result.append(CandidateFile(path: entry, displayPath: entry.string))
                         }
                     }
                 } else {
-                    guard includeHidden || !isHidden(path: resolved) else {
+                    guard includeHidden || !isHidden(path: resolved.string) else {
                         continue
                     }
-                    guard matchesType(path: resolved, includeExtensions: includeExtensions, excludeExtensions: excludeExtensions) else {
+                    guard matchesType(
+                        path: resolved.string,
+                        includeExtensions: includeExtensions,
+                        excludeExtensions: excludeExtensions
+                    ) else {
                         continue
                     }
-                    guard matchesGlobs(path: resolved, globs: globRegexes) else {
+                    guard matchesGlobs(path: resolved.string, globs: globRegexes) else {
                         continue
                     }
-                    if seen.insert(resolved).inserted {
+                    if seen.insert(resolved.string).inserted {
                         result.append(CandidateFile(path: resolved, displayPath: root))
                     }
                 }
@@ -641,7 +649,7 @@ struct RgCommand: BuiltinCommand {
     }
 
     private static func isHidden(path: String) -> Bool {
-        PathUtils.splitComponents(path).contains { $0.hasPrefix(".") }
+        WorkspacePath.splitComponents(path).contains { $0.hasPrefix(".") }
     }
 
     private static func matchesType(path: String, includeExtensions: Set<String>, excludeExtensions: Set<String>) -> Bool {
@@ -659,7 +667,7 @@ struct RgCommand: BuiltinCommand {
 }
 
 private struct SearchFileTarget {
-    let path: String
+    let path: WorkspacePath
     let displayPath: String
 }
 

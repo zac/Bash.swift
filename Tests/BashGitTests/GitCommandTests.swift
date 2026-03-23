@@ -145,6 +145,36 @@ struct GitCommandTests {
         #expect(clone.stderrString.contains("already exists"))
     }
 
+    @Test("clone remote repository respects network policy")
+    func cloneRemoteRepositoryRespectsNetworkPolicy() async throws {
+        let (session, root) = try await GitTestSupport.makeReadWriteSession(
+            networkPolicy: ShellNetworkPolicy(
+                allowsHTTPRequests: true,
+                denyPrivateRanges: true
+            )
+        )
+        defer { GitTestSupport.removeDirectory(root) }
+
+        let clone = await session.run("git clone https://127.0.0.1:1/repo.git")
+        #expect(clone.exitCode == 1)
+        #expect(clone.stderrString.contains("private network host"))
+    }
+
+    @Test("clone ssh-style repository respects host allowlist")
+    func cloneSSHStyleRepositoryRespectsHostAllowlist() async throws {
+        let (session, root) = try await GitTestSupport.makeReadWriteSession(
+            networkPolicy: ShellNetworkPolicy(
+                allowsHTTPRequests: true,
+                allowedHosts: ["gitlab.com"]
+            )
+        )
+        defer { GitTestSupport.removeDirectory(root) }
+
+        let clone = await session.run("git clone git@github.com:velos/Bash.swift.git")
+        #expect(clone.exitCode == 1)
+        #expect(clone.stderrString.contains("not in the network allowlist"))
+    }
+
     @Test("rev-parse outside repository is fatal")
     func revParseOutsideRepository() async throws {
         let (session, root) = try await GitTestSupport.makeReadWriteSession()

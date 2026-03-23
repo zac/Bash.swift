@@ -7,6 +7,7 @@ public enum PythonExecutionMode: String, Sendable {
 }
 
 public struct PythonExecutionRequest: Sendable {
+    public var commandName: String
     public var mode: PythonExecutionMode
     public var source: String
     public var scriptPath: String?
@@ -14,16 +15,20 @@ public struct PythonExecutionRequest: Sendable {
     public var currentDirectory: String
     public var environment: [String: String]
     public var stdin: String
+    public var permissionAuthorizer: (any ShellPermissionAuthorizing)?
 
     public init(
+        commandName: String,
         mode: PythonExecutionMode,
         source: String,
         scriptPath: String?,
         arguments: [String],
         currentDirectory: String,
         environment: [String: String],
-        stdin: String
+        stdin: String,
+        permissionAuthorizer: (any ShellPermissionAuthorizing)? = nil
     ) {
+        self.commandName = commandName
         self.mode = mode
         self.source = source
         self.scriptPath = scriptPath
@@ -31,6 +36,7 @@ public struct PythonExecutionRequest: Sendable {
         self.currentDirectory = currentDirectory
         self.environment = environment
         self.stdin = stdin
+        self.permissionAuthorizer = permissionAuthorizer
     }
 }
 
@@ -49,7 +55,7 @@ public struct PythonExecutionResult: Sendable {
 public protocol PythonRuntime: Sendable {
     func execute(
         request: PythonExecutionRequest,
-        filesystem: any ShellFilesystem
+        filesystem: any FileSystem
     ) async -> PythonExecutionResult
 
     func versionString() async -> String
@@ -110,7 +116,7 @@ struct UnsupportedPythonRuntime: PythonRuntime {
 
     func execute(
         request: PythonExecutionRequest,
-        filesystem: any ShellFilesystem
+        filesystem: any FileSystem
     ) async -> PythonExecutionResult {
         _ = request
         _ = filesystem

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import Workspace
 
 struct DiffCommand: BuiltinCommand {
     struct Options: ParsableArguments {
@@ -68,8 +69,8 @@ struct DiffCommand: BuiltinCommand {
     }
 
     private static func compareDirectories(
-        leftRoot: String,
-        rightRoot: String,
+        leftRoot: WorkspacePath,
+        rightRoot: WorkspacePath,
         leftLabel: String,
         rightLabel: String,
         unified: Bool,
@@ -98,8 +99,8 @@ struct DiffCommand: BuiltinCommand {
                 }
 
                 let fileDifferent = try await compareFiles(
-                    leftPath: PathUtils.join(leftRoot, key),
-                    rightPath: PathUtils.join(rightRoot, key),
+                    leftPath: leftRoot.appending(key),
+                    rightPath: rightRoot.appending(key),
                     leftLabel: "\(leftLabel)/\(key)",
                     rightLabel: "\(rightLabel)/\(key)",
                     unified: unified,
@@ -121,14 +122,15 @@ struct DiffCommand: BuiltinCommand {
     }
 
     private static func recursiveEntryMap(
-        root: String,
-        filesystem: any ShellFilesystem
+        root: WorkspacePath,
+        filesystem: any FileSystem
     ) async throws -> [String: FileInfo] {
         let entries = try await CommandFS.walk(path: root, filesystem: filesystem)
         var map: [String: FileInfo] = [:]
         for entry in entries where entry != root {
             let info = try await filesystem.stat(path: entry)
-            let relative = String(entry.dropFirst(root.count)).trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            let relative = String(entry.string.dropFirst(root.string.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             if !relative.isEmpty {
                 map[relative] = info
             }
@@ -137,8 +139,8 @@ struct DiffCommand: BuiltinCommand {
     }
 
     private static func compareFiles(
-        leftPath: String,
-        rightPath: String,
+        leftPath: WorkspacePath,
+        rightPath: WorkspacePath,
         leftLabel: String,
         rightLabel: String,
         unified: Bool,
@@ -198,4 +200,3 @@ struct DiffCommand: BuiltinCommand {
         return lines
     }
 }
-

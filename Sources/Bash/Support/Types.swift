@@ -1,4 +1,5 @@
 import Foundation
+import Workspace
 
 public struct CommandResult: Sendable {
     public var stdout: Data
@@ -17,6 +18,55 @@ public struct CommandResult: Sendable {
 
     public var stderrString: String {
         String(decoding: stderr, as: UTF8.self)
+    }
+}
+
+public struct RunOptions: Sendable {
+    public var stdin: Data
+    public var environment: [String: String]
+    public var replaceEnvironment: Bool
+    public var currentDirectory: String?
+    public var executionLimits: ExecutionLimits?
+    public var cancellationCheck: (@Sendable () -> Bool)?
+
+    public init(
+        stdin: Data = Data(),
+        environment: [String: String] = [:],
+        replaceEnvironment: Bool = false,
+        currentDirectory: String? = nil,
+        executionLimits: ExecutionLimits? = nil,
+        cancellationCheck: (@Sendable () -> Bool)? = nil
+    ) {
+        self.stdin = stdin
+        self.environment = environment
+        self.replaceEnvironment = replaceEnvironment
+        self.currentDirectory = currentDirectory
+        self.executionLimits = executionLimits
+        self.cancellationCheck = cancellationCheck
+    }
+}
+
+public struct ExecutionLimits: Sendable {
+    public static let `default` = ExecutionLimits()
+
+    public var maxCommandCount: Int
+    public var maxFunctionDepth: Int
+    public var maxLoopIterations: Int
+    public var maxCommandSubstitutionDepth: Int
+    public var maxWallClockDuration: TimeInterval?
+
+    public init(
+        maxCommandCount: Int = 10_000,
+        maxFunctionDepth: Int = 100,
+        maxLoopIterations: Int = 10_000,
+        maxCommandSubstitutionDepth: Int = 32,
+        maxWallClockDuration: TimeInterval? = nil
+    ) {
+        self.maxCommandCount = maxCommandCount
+        self.maxFunctionDepth = maxFunctionDepth
+        self.maxLoopIterations = maxLoopIterations
+        self.maxCommandSubstitutionDepth = maxCommandSubstitutionDepth
+        self.maxWallClockDuration = maxWallClockDuration
     }
 }
 
@@ -90,21 +140,27 @@ public struct DefaultSecretOutputRedactor: SecretOutputRedacting {
 }
 
 public struct SessionOptions: Sendable {
-    public var filesystem: any ShellFilesystem
+    public var filesystem: any FileSystem
     public var layout: SessionLayout
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
+    public var networkPolicy: ShellNetworkPolicy
+    public var executionLimits: ExecutionLimits
+    public var permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
     public var secretOutputRedactor: any SecretOutputRedacting
 
     public init(
-        filesystem: any ShellFilesystem = ReadWriteFilesystem(),
+        filesystem: any FileSystem = ReadWriteFilesystem(),
         layout: SessionLayout = .unixLike,
         initialEnvironment: [String: String] = [:],
         enableGlobbing: Bool = true,
         maxHistory: Int = 1_000,
+        networkPolicy: ShellNetworkPolicy = .disabled,
+        executionLimits: ExecutionLimits = .default,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil,
         secretPolicy: SecretHandlingPolicy = .off,
         secretResolver: (any SecretReferenceResolving)? = nil,
         secretOutputRedactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()
@@ -114,6 +170,9 @@ public struct SessionOptions: Sendable {
         self.initialEnvironment = initialEnvironment
         self.enableGlobbing = enableGlobbing
         self.maxHistory = maxHistory
+        self.networkPolicy = networkPolicy
+        self.executionLimits = executionLimits
+        self.permissionHandler = permissionHandler
         self.secretPolicy = secretPolicy
         self.secretResolver = secretResolver
         self.secretOutputRedactor = secretOutputRedactor
@@ -128,47 +187,15 @@ public enum ShellError: Error, CustomStringConvertible, Sendable {
     public var description: String {
         switch self {
         case let .invalidPath(path):
+            if path.contains("\u{0}") {
+                return "path contains null byte"
+            }
             return "invalid path: \(path)"
         case let .parserError(message):
             return message
         case let .unsupported(message):
             return message
         }
-    }
-}
-
-public struct FileInfo: Sendable {
-    public var path: String
-    public var isDirectory: Bool
-    public var isSymbolicLink: Bool
-    public var size: UInt64
-    public var permissions: Int
-    public var modificationDate: Date?
-
-    public init(
-        path: String,
-        isDirectory: Bool,
-        isSymbolicLink: Bool,
-        size: UInt64,
-        permissions: Int,
-        modificationDate: Date?
-    ) {
-        self.path = path
-        self.isDirectory = isDirectory
-        self.isSymbolicLink = isSymbolicLink
-        self.size = size
-        self.permissions = permissions
-        self.modificationDate = modificationDate
-    }
-}
-
-public struct DirectoryEntry: Sendable {
-    public var name: String
-    public var info: FileInfo
-
-    public init(name: String, info: FileInfo) {
-        self.name = name
-        self.info = info
     }
 }
 
