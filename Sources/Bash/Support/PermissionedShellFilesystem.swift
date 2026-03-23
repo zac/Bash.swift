@@ -25,8 +25,8 @@ final class PermissionedShellFilesystem: ShellFilesystem, @unchecked Sendable {
         return filesystem
     }
 
-    func configure(rootDirectory: URL) throws {
-        try base.configure(rootDirectory: rootDirectory)
+    func configure(rootDirectory: URL) async throws {
+        try await base.configure(rootDirectory: rootDirectory)
     }
 
     func stat(path: String) async throws -> FileInfo {

@@ -30,7 +30,7 @@ struct FilesystemOptionsTests {
         let shellFilesystem: any ShellFilesystem = workspaceFilesystem
         let inMemoryFilesystem = InMemoryFilesystem()
         try await inMemoryFilesystem.writeFile(path: "/note.txt", data: Data("shim".utf8), append: false)
-        inMemoryFilesystem.reset()
+        await inMemoryFilesystem.reset()
 
         let info = FileInfo(
             path: "/note.txt",
@@ -59,7 +59,7 @@ struct FilesystemOptionsTests {
 
         let session = try await BashSession(
             options: SessionOptions(
-                filesystem: try OverlayFilesystem(rootDirectory: root),
+                filesystem: try await OverlayFilesystem(rootDirectory: root),
                 layout: .rootOnly
             )
         )
@@ -94,11 +94,11 @@ struct FilesystemOptionsTests {
             mounts: [
                 MountableFilesystem.Mount(
                     mountPoint: "/workspace",
-                    filesystem: try OverlayFilesystem(rootDirectory: workspaceRoot)
+                    filesystem: try await OverlayFilesystem(rootDirectory: workspaceRoot)
                 ),
                 MountableFilesystem.Mount(
                     mountPoint: "/docs",
-                    filesystem: try OverlayFilesystem(rootDirectory: docsRoot)
+                    filesystem: try await OverlayFilesystem(rootDirectory: docsRoot)
                 ),
             ]
         )

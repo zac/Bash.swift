@@ -24,7 +24,7 @@ public final actor BashSession {
 
     public init(rootDirectory: URL, options: SessionOptions = .init()) async throws {
         let filesystem = options.filesystem
-        try filesystem.configure(rootDirectory: rootDirectory)
+        try await filesystem.configure(rootDirectory: rootDirectory)
         try await self.init(options: options, configuredFilesystem: filesystem)
     }
 
