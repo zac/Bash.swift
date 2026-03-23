@@ -24,29 +24,32 @@ struct FilesystemOptionsTests {
         #expect(ls.stdoutString.contains("rootless.txt"))
     }
 
-    @Test("bash reexports workspace filesystem shims")
-    func bashReexportsWorkspaceFilesystemShims() async throws {
-        let workspaceFilesystem: any WorkspaceFilesystem = InMemoryFilesystem()
-        let shellFilesystem: any ShellFilesystem = workspaceFilesystem
+    @Test("bash reexports native workspace filesystem types")
+    func bashReexportsNativeWorkspaceFilesystemTypes() async throws {
+        let workspaceFilesystem: any FileSystem = InMemoryFilesystem()
+        let shellFilesystem: any FileSystem = workspaceFilesystem
         let inMemoryFilesystem = InMemoryFilesystem()
-        try await inMemoryFilesystem.writeFile(path: "/note.txt", data: Data("shim".utf8), append: false)
+        try await inMemoryFilesystem.writeFile(
+            path: WorkspacePath(normalizing: "/note.txt"),
+            data: Data("native".utf8),
+            append: false
+        )
         await inMemoryFilesystem.reset()
 
         let info = FileInfo(
-            path: "/note.txt",
-            isDirectory: false,
-            isSymbolicLink: false,
+            path: WorkspacePath(normalizing: "/note.txt"),
+            kind: .file,
             size: 4,
-            permissions: 0o644,
+            permissions: POSIXPermissions(0o644),
             modificationDate: nil
         )
         let entry = DirectoryEntry(name: "note.txt", info: info)
-        let error = WorkspaceError.unsupported("shim check")
+        let error = WorkspaceError.unsupported("native check")
 
-        #expect(await shellFilesystem.exists(path: "/"))
-        #expect(!(await inMemoryFilesystem.exists(path: "/note.txt")))
-        #expect(entry.info.path == "/note.txt")
-        #expect(error.description.contains("shim check"))
+        #expect(await shellFilesystem.exists(path: .root))
+        #expect(!(await inMemoryFilesystem.exists(path: WorkspacePath(normalizing: "/note.txt"))))
+        #expect(entry.info.path == WorkspacePath(normalizing: "/note.txt"))
+        #expect(error.description.contains("native check"))
     }
 
     @Test("overlay filesystem snapshots disk and keeps writes in memory")

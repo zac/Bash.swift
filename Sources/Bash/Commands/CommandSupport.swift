@@ -50,7 +50,7 @@ enum CommandFS {
         return (contents, failed)
     }
 
-    static func recursiveSize(of path: String, filesystem: any ShellFilesystem) async throws -> UInt64 {
+    static func recursiveSize(of path: WorkspacePath, filesystem: any FileSystem) async throws -> UInt64 {
         let info = try await filesystem.stat(path: path)
         if !info.isDirectory {
             return info.size
@@ -59,12 +59,12 @@ enum CommandFS {
         var total: UInt64 = 0
         let children = try await filesystem.listDirectory(path: path)
         for child in children {
-            total += try await recursiveSize(of: PathUtils.join(path, child.name), filesystem: filesystem)
+            total += try await recursiveSize(of: path.appending(child.name), filesystem: filesystem)
         }
         return total
     }
 
-    static func walk(path: String, filesystem: any ShellFilesystem) async throws -> [String] {
+    static func walk(path: WorkspacePath, filesystem: any FileSystem) async throws -> [WorkspacePath] {
         var output = [path]
         let info = try await filesystem.stat(path: path)
         guard info.isDirectory else {
@@ -73,7 +73,7 @@ enum CommandFS {
 
         let children = try await filesystem.listDirectory(path: path)
         for child in children {
-            let childPath = PathUtils.join(path, child.name)
+            let childPath = path.appending(child.name)
             output.append(contentsOf: try await walk(path: childPath, filesystem: filesystem))
         }
         return output
@@ -103,7 +103,7 @@ enum CommandFS {
     }
 
     static func wildcardMatch(pattern: String, value: String) -> Bool {
-        let regexString = PathUtils.globToRegex(pattern)
+        let regexString = WorkspacePath.globToRegex(pattern)
         guard let regex = try? NSRegularExpression(pattern: regexString) else {
             return false
         }

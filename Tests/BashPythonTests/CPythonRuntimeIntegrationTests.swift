@@ -115,7 +115,7 @@ struct CPythonRuntimeIntegrationTests {
     @BashPythonTestActor
     func networkPolicyBlocksPrivateSocketTargets() async throws {
         let (session, root) = try await PythonTestSupport.makeSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 denyPrivateRanges: true
             )
@@ -131,7 +131,7 @@ struct CPythonRuntimeIntegrationTests {
     @BashPythonTestActor
     func pythonNetworkChecksReuseHostCallbackAfterPolicyPasses() async throws {
         let (session, root) = try await PythonTestSupport.makeSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 allowedHosts: ["1.1.1.1"]
             ),

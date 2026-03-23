@@ -182,24 +182,11 @@ struct ParserAndFilesystemTests {
         #expect(read.stderrString.contains("invalid path"))
     }
 
-    @Test("filesystems reject paths with null bytes")
-    func filesystemsRejectPathsWithNullBytes() async throws {
-        let inMemory = InMemoryFilesystem()
-
+    @Test("workspace paths reject null bytes")
+    func workspacePathsRejectNullBytes() {
         do {
-            _ = try await inMemory.readFile(path: "/bad\u{0}name")
-            Issue.record("expected in-memory null-byte rejection")
-        } catch {
-            #expect("\(error)".contains("null byte"))
-        }
-
-        let root = try TestSupport.makeTempDirectory(prefix: "BashNullPath")
-        defer { TestSupport.removeDirectory(root) }
-
-        let readWrite = try ReadWriteFilesystem(rootDirectory: root)
-        do {
-            try await readWrite.writeFile(path: "/bad\u{0}name", data: Data(), append: false)
-            Issue.record("expected read-write null-byte rejection")
+            _ = try WorkspacePath(validating: "/bad\u{0}name")
+            Issue.record("expected workspace path validation to reject null bytes")
         } catch {
             #expect("\(error)".contains("null byte"))
         }

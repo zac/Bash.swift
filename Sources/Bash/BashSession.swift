@@ -2,10 +2,10 @@ import Foundation
 import Workspace
 
 public final actor BashSession {
-    let filesystemStore: any ShellFilesystem
+    let filesystemStore: any FileSystem
     private let options: SessionOptions
     let jobManager: ShellJobManager
-    private let permissionAuthorizer: PermissionAuthorizer
+    private let permissionAuthorizer: ShellPermissionAuthorizer
     var executionControlStore: ExecutionControl?
 
     var currentDirectoryStore: String
@@ -59,7 +59,7 @@ public final actor BashSession {
 
         if let overrideDirectory = options.currentDirectory {
             do {
-                try PathUtils.validate(overrideDirectory)
+                try validateWorkspacePath(overrideDirectory)
             } catch {
                 return CommandResult(
                     stdout: Data(),
@@ -74,7 +74,7 @@ public final actor BashSession {
         }
 
         if let overrideDirectory = options.currentDirectory {
-            currentDirectoryStore = PathUtils.normalize(
+            currentDirectoryStore = normalizeWorkspacePath(
                 path: overrideDirectory,
                 currentDirectory: savedCurrentDirectory
             )
@@ -306,7 +306,7 @@ public final actor BashSession {
             break
         case .unixLike:
             for path in ["/home/user", "/bin", "/usr/bin", "/tmp"] {
-                try await filesystemStore.createDirectory(path: path, recursive: true)
+                try await filesystemStore.createDirectory(path: WorkspacePath(normalizing: path), recursive: true)
             }
         }
     }
@@ -316,25 +316,25 @@ public final actor BashSession {
         let data = Data(content.utf8)
 
         for directory in ["/bin", "/usr/bin"] {
-            let path = "\(directory)/\(commandName)"
+            let path = WorkspacePath(normalizing: "\(directory)/\(commandName)")
             if await filesystemStore.exists(path: path) {
                 continue
             }
 
             do {
                 try await filesystemStore.writeFile(path: path, data: data, append: false)
-                try await filesystemStore.setPermissions(path: path, permissions: 0o755)
+                try await filesystemStore.setPermissions(path: path, permissions: POSIXPermissions(0o755))
             } catch {
                 // Best effort for command lookup stubs.
             }
         }
     }
 
-    private init(options: SessionOptions, configuredFilesystem: any ShellFilesystem) async throws {
+    private init(options: SessionOptions, configuredFilesystem: any FileSystem) async throws {
         self.options = options
         filesystemStore = configuredFilesystem
         jobManager = ShellJobManager()
-        permissionAuthorizer = PermissionAuthorizer(
+        permissionAuthorizer = ShellPermissionAuthorizer(
             networkPolicy: options.networkPolicy,
             handler: options.permissionHandler
         )

@@ -158,10 +158,10 @@ struct ZipCommand: BuiltinCommand {
     }
 
     private static func collectEntries(
-        virtualPath: String,
+        virtualPath: WorkspacePath,
         archivePath: String,
         recursiveDirectories: Bool,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         seenPaths: inout Set<String>
     ) async throws -> [ZipCodec.Entry] {
         let info = try await filesystem.stat(path: virtualPath)
@@ -178,7 +178,7 @@ struct ZipCommand: BuiltinCommand {
                 output.append(
                     .directory(
                         path: directoryPath,
-                        mode: info.permissions,
+                        mode: info.permissionBits,
                         modificationTime: modificationTime(info.modificationDate)
                     )
                 )
@@ -186,7 +186,7 @@ struct ZipCommand: BuiltinCommand {
 
             let children = try await filesystem.listDirectory(path: virtualPath).sorted { $0.name < $1.name }
             for child in children {
-                let childVirtualPath = PathUtils.join(virtualPath, child.name)
+                let childVirtualPath = virtualPath.appending(child.name)
                 let childArchivePath = directoryPath + child.name
                 output.append(
                     contentsOf: try await collectEntries(
@@ -207,7 +207,7 @@ struct ZipCommand: BuiltinCommand {
                 .file(
                     path: cleanPath,
                     data: data,
-                    mode: info.permissions,
+                    mode: info.permissionBits,
                     modificationTime: modificationTime(info.modificationDate)
                 )
             ]
@@ -215,11 +215,11 @@ struct ZipCommand: BuiltinCommand {
         return []
     }
 
-    private static func archivePathForOperand(_ operand: String, resolvedPath: String) -> String {
-        let normalizedOperand = PathUtils.normalize(path: operand, currentDirectory: "/")
+    private static func archivePathForOperand(_ operand: String, resolvedPath: WorkspacePath) -> String {
+        let normalizedOperand = normalizeWorkspacePath(path: operand, currentDirectory: "/")
         var archivePath = String(normalizedOperand.dropFirst())
         if archivePath.isEmpty {
-            archivePath = PathUtils.basename(resolvedPath)
+            archivePath = resolvedPath.basename
         }
         if archivePath.isEmpty {
             archivePath = "root"
@@ -294,7 +294,7 @@ struct UnzipCommand: BuiltinCommand {
             return 0
         }
 
-        let destinationRoot = options.d.map(context.resolvePath) ?? context.currentDirectory
+        let destinationRoot = options.d.map(context.resolvePath) ?? context.currentDirectoryPath
         do {
             try await context.filesystem.createDirectory(path: destinationRoot, recursive: true)
         } catch {
@@ -304,23 +304,23 @@ struct UnzipCommand: BuiltinCommand {
 
         var failed = false
         for entry in selectedEntries {
-            let outputPath = PathUtils.normalize(path: entry.path, currentDirectory: destinationRoot)
+            let outputPath = WorkspacePath(normalizing: entry.path, relativeTo: destinationRoot)
 
             do {
                 switch entry.kind {
                 case .directory:
                     try await context.filesystem.createDirectory(path: outputPath, recursive: true)
-                    try? await context.filesystem.setPermissions(path: outputPath, permissions: entry.mode)
+                    try? await context.filesystem.setPermissions(path: outputPath, permissions: POSIXPermissions(entry.mode))
                 case let .file(data):
-                    let parent = PathUtils.dirname(outputPath)
+                    let parent = outputPath.dirname
                     try await context.filesystem.createDirectory(path: parent, recursive: true)
                     if !options.o, await context.filesystem.exists(path: outputPath) {
-                        context.writeStderr("unzip: \(PathUtils.basename(outputPath)): already exists\n")
+                        context.writeStderr("unzip: \(outputPath.basename): already exists\n")
                         failed = true
                         continue
                     }
                     try await context.filesystem.writeFile(path: outputPath, data: data, append: false)
-                    try? await context.filesystem.setPermissions(path: outputPath, permissions: entry.mode)
+                    try? await context.filesystem.setPermissions(path: outputPath, permissions: POSIXPermissions(entry.mode))
                 }
             } catch {
                 context.writeStderr("unzip: \(entry.path): \(error)\n")
@@ -412,13 +412,13 @@ struct TarCommand: BuiltinCommand {
             return 2
         }
 
-        let baseDirectory = options.C.map(context.resolvePath) ?? context.currentDirectory
+        let baseDirectory = options.C.map(context.resolvePath) ?? context.currentDirectoryPath
 
         var entries: [TarCodec.Entry] = []
         var seen = Set<String>()
 
         for operand in options.paths {
-            let resolvedInputPath = PathUtils.normalize(path: operand, currentDirectory: baseDirectory)
+            let resolvedInputPath = WorkspacePath(normalizing: operand, relativeTo: baseDirectory)
             let archivePath = archivePathForOperand(operand, resolvedPath: resolvedInputPath)
             do {
                 entries.append(
@@ -471,20 +471,20 @@ struct TarCommand: BuiltinCommand {
     ) async -> Int32 {
         do {
             let entries = try await readTarEntries(context: &context, archiveArg: archiveArg, forceGzip: options.z)
-            let destinationRoot = options.C.map(context.resolvePath) ?? context.currentDirectory
+            let destinationRoot = options.C.map(context.resolvePath) ?? context.currentDirectoryPath
             try await context.filesystem.createDirectory(path: destinationRoot, recursive: true)
 
             for entry in filterEntries(entries: entries, filters: options.paths) {
-                let outputPath = PathUtils.normalize(path: entry.path, currentDirectory: destinationRoot)
+                let outputPath = WorkspacePath(normalizing: entry.path, relativeTo: destinationRoot)
                 switch entry.kind {
                 case .directory:
                     try await context.filesystem.createDirectory(path: outputPath, recursive: true)
-                    try? await context.filesystem.setPermissions(path: outputPath, permissions: entry.mode)
+                    try? await context.filesystem.setPermissions(path: outputPath, permissions: POSIXPermissions(entry.mode))
                 case let .file(data):
-                    let parent = PathUtils.dirname(outputPath)
+                    let parent = outputPath.dirname
                     try await context.filesystem.createDirectory(path: parent, recursive: true)
                     try await context.filesystem.writeFile(path: outputPath, data: data, append: false)
-                    try? await context.filesystem.setPermissions(path: outputPath, permissions: entry.mode)
+                    try? await context.filesystem.setPermissions(path: outputPath, permissions: POSIXPermissions(entry.mode))
                 }
             }
             return 0
@@ -535,11 +535,11 @@ struct TarCommand: BuiltinCommand {
         return value
     }
 
-    private static func archivePathForOperand(_ operand: String, resolvedPath: String) -> String {
-        let normalizedOperand = PathUtils.normalize(path: operand, currentDirectory: "/")
+    private static func archivePathForOperand(_ operand: String, resolvedPath: WorkspacePath) -> String {
+        let normalizedOperand = normalizeWorkspacePath(path: operand, currentDirectory: "/")
         var archivePath = String(normalizedOperand.dropFirst())
         if archivePath.isEmpty {
-            archivePath = PathUtils.basename(resolvedPath)
+            archivePath = resolvedPath.basename
         }
         if archivePath.isEmpty {
             archivePath = "root"
@@ -548,9 +548,9 @@ struct TarCommand: BuiltinCommand {
     }
 
     private static func collectTarEntries(
-        virtualPath: String,
+        virtualPath: WorkspacePath,
         archivePath: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         seenPaths: inout Set<String>
     ) async throws -> [TarCodec.Entry] {
         let info = try await filesystem.stat(path: virtualPath)
@@ -563,7 +563,7 @@ struct TarCommand: BuiltinCommand {
                 output.append(
                     .directory(
                         path: directoryPath,
-                        mode: info.permissions,
+                        mode: info.permissionBits,
                         modificationTime: modificationTime(info.modificationDate)
                     )
                 )
@@ -571,7 +571,7 @@ struct TarCommand: BuiltinCommand {
 
             let children = try await filesystem.listDirectory(path: virtualPath).sorted { $0.name < $1.name }
             for child in children {
-                let childVirtualPath = PathUtils.join(virtualPath, child.name)
+                let childVirtualPath = virtualPath.appending(child.name)
                 let childArchivePath = directoryPath + child.name
                 output.append(
                     contentsOf: try await collectTarEntries(
@@ -591,7 +591,7 @@ struct TarCommand: BuiltinCommand {
                 .file(
                     path: cleanPath,
                     data: data,
-                    mode: info.permissions,
+                    mode: info.permissionBits,
                     modificationTime: modificationTime(info.modificationDate)
                 )
             ]
@@ -635,7 +635,7 @@ private enum CompressionCommandRunner {
                     continue
                 }
 
-                let destinationPath = sourcePath + ".gz"
+                let destinationPath = WorkspacePath(normalizing: sourcePath.string + ".gz")
                 if !forceOverwrite, await context.filesystem.exists(path: destinationPath) {
                     context.writeStderr("\(commandName): \(file).gz: already exists\n")
                     failed = true
@@ -687,7 +687,7 @@ private enum CompressionCommandRunner {
 
                 let destinationPath = gunzipOutputPath(for: sourcePath)
                 if !forceOverwrite, await context.filesystem.exists(path: destinationPath) {
-                    context.writeStderr("\(commandName): \(PathUtils.basename(destinationPath)): already exists\n")
+                    context.writeStderr("\(commandName): \(destinationPath.basename): already exists\n")
                     failed = true
                     continue
                 }
@@ -705,14 +705,15 @@ private enum CompressionCommandRunner {
         return failed ? 1 : 0
     }
 
-    private static func gunzipOutputPath(for sourcePath: String) -> String {
-        if sourcePath.hasSuffix(".tgz") {
-            return String(sourcePath.dropLast(4)) + ".tar"
+    private static func gunzipOutputPath(for sourcePath: WorkspacePath) -> WorkspacePath {
+        let source = sourcePath.string
+        if source.hasSuffix(".tgz") {
+            return WorkspacePath(normalizing: String(source.dropLast(4)) + ".tar")
         }
-        if sourcePath.hasSuffix(".gz") {
-            return String(sourcePath.dropLast(3))
+        if source.hasSuffix(".gz") {
+            return WorkspacePath(normalizing: String(source.dropLast(3)))
         }
-        return sourcePath + ".out"
+        return WorkspacePath(normalizing: source + ".out")
     }
 }
 

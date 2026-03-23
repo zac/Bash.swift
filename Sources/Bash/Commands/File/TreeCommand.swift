@@ -29,7 +29,7 @@ struct TreeCommand: BuiltinCommand {
         } else if options.path == "/" || resolved == "/" {
             displayName = "/"
         } else {
-            displayName = PathUtils.basename(options.path)
+            displayName = WorkspacePath.basename(options.path)
         }
 
         do {
@@ -51,12 +51,12 @@ struct TreeCommand: BuiltinCommand {
     }
 
     private static func collectLines(
-        path: String,
+        path: WorkspacePath,
         displayName: String,
         depth: Int,
         maxDepth: Int?,
         includeHidden: Bool,
-        filesystem: any ShellFilesystem
+        filesystem: any FileSystem
     ) async throws -> [String] {
         var lines = [String(repeating: "  ", count: depth) + displayName]
         let info = try await filesystem.stat(path: path)
@@ -75,7 +75,7 @@ struct TreeCommand: BuiltinCommand {
         for child in children {
             lines.append(
                 contentsOf: try await collectLines(
-                    path: PathUtils.join(path, child.name),
+                    path: path.appending(child.name),
                     displayName: child.name,
                     depth: depth + 1,
                     maxDepth: maxDepth,
@@ -88,4 +88,3 @@ struct TreeCommand: BuiltinCommand {
         return lines
     }
 }
-

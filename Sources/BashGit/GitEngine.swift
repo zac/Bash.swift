@@ -43,11 +43,11 @@ private enum GitEngineError: Error {
 private struct CloneSource {
     let sourceURL: String
     let projection: GitRepositoryProjection?
-    let virtualPath: String?
+    let virtualPath: WorkspacePath?
 }
 
 private struct GitRepositoryProjection {
-    let virtualRoot: String
+    let virtualRoot: WorkspacePath
     let temporaryDirectory: URL
     let localRoot: URL
 
@@ -55,7 +55,7 @@ private struct GitRepositoryProjection {
         try? FileManager.default.removeItem(at: temporaryDirectory)
     }
 
-    func syncBack(filesystem: any ShellFilesystem) async throws {
+    func syncBack(filesystem: any FileSystem) async throws {
         try await GitFilesystemProjection.syncFromLocal(
             localRoot: localRoot,
             toFilesystemRoot: virtualRoot,
@@ -165,7 +165,7 @@ private enum GitEngineLibgit2 {
         }
 
         try await projection.syncBack(filesystem: context.filesystem)
-        let normalized = targetPath == "/" ? "/" : targetPath + "/"
+        let normalized = targetPath.isRoot ? "/" : targetPath.string + "/"
         return GitExecutionResult(stdout: "Initialized empty Git repository in \(normalized).git/\n", exitCode: 0)
     }
 
@@ -440,7 +440,7 @@ private enum GitEngineLibgit2 {
             throw GitEngineError.usage("usage: git rev-parse --is-inside-work-tree\n")
         }
 
-        let start = normalizeAbsolute(context.currentDirectory)
+        let start = WorkspacePath(normalizing: context.currentDirectory)
         if let _ = try await GitFilesystemProjection.findRepositoryRoot(
             from: start,
             filesystem: context.filesystem
@@ -484,7 +484,7 @@ private enum GitEngineLibgit2 {
     }
 
     private static func requireRepositoryProjection(context: CommandContext) async throws -> GitRepositoryProjection {
-        let start = normalizeAbsolute(context.currentDirectory)
+        let start = WorkspacePath(normalizing: context.currentDirectory)
         guard let repositoryRoot = try await GitFilesystemProjection.findRepositoryRoot(
             from: start,
             filesystem: context.filesystem
@@ -559,7 +559,10 @@ private enum GitEngineLibgit2 {
         )
     }
 
-    private static func defaultCloneDirectoryName(repositoryArgument: String, localRepositoryPath: String?) -> String {
+    private static func defaultCloneDirectoryName(
+        repositoryArgument: String,
+        localRepositoryPath: WorkspacePath?
+    ) -> String {
         if let localRepositoryPath {
             var name = basename(of: localRepositoryPath)
             if name.hasSuffix(".git") {
@@ -891,47 +894,30 @@ private enum GitEngineLibgit2 {
         message.split(separator: "\n", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? ""
     }
 
-    private static func normalizeAbsolute(_ path: String) -> String {
-        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        if parts.isEmpty {
-            return "/"
-        }
-        return "/" + parts.joined(separator: "/")
+    private static func normalizeAbsolute(_ path: String) -> WorkspacePath {
+        WorkspacePath(normalizing: path)
     }
 
-    private static func basename(of path: String) -> String {
-        let normalized = normalizeAbsolute(path)
-        if normalized == "/" {
-            return "/"
-        }
-        return normalized.split(separator: "/", omittingEmptySubsequences: true).last.map(String.init) ?? ""
+    private static func basename(of path: WorkspacePath) -> String {
+        path.basename
     }
 
-    private static func parent(of path: String) -> String {
-        let normalized = normalizeAbsolute(path)
-        if normalized == "/" {
-            return "/"
-        }
-        var parts = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        _ = parts.popLast()
-        if parts.isEmpty {
-            return "/"
-        }
-        return "/" + parts.joined(separator: "/")
+    private static func parent(of path: WorkspacePath) -> WorkspacePath {
+        path.dirname
     }
 
-    private static func relativePath(of absolutePath: String, fromRoot root: String) -> String? {
-        let normalizedAbsolute = normalizeAbsolute(absolutePath)
-        let normalizedRoot = normalizeAbsolute(root)
+    private static func relativePath(of absolutePath: WorkspacePath, fromRoot root: WorkspacePath) -> String? {
+        let normalizedAbsolute = absolutePath
+        let normalizedRoot = root
         if normalizedAbsolute == normalizedRoot {
             return "."
         }
 
-        let prefix = normalizedRoot == "/" ? "/" : normalizedRoot + "/"
-        guard normalizedAbsolute.hasPrefix(prefix) else {
+        let prefix = normalizedRoot.isRoot ? "/" : normalizedRoot.string + "/"
+        guard normalizedAbsolute.string.hasPrefix(prefix) else {
             return nil
         }
-        return String(normalizedAbsolute.dropFirst(prefix.count))
+        return String(normalizedAbsolute.string.dropFirst(prefix.count))
     }
 }
 
@@ -943,26 +929,26 @@ private enum GitFilesystemProjection {
     }
 
     static func findRepositoryRoot(
-        from startPath: String,
-        filesystem: any ShellFilesystem
-    ) async throws -> String? {
-        var current = normalizeAbsolute(startPath)
+        from startPath: WorkspacePath,
+        filesystem: any FileSystem
+    ) async throws -> WorkspacePath? {
+        var current = startPath
         while true {
-            let dotGit = join(current, ".git")
+            let dotGit = current.appending(".git")
             if await filesystem.exists(path: dotGit) {
                 return current
             }
 
-            if current == "/" {
+            if current.isRoot {
                 return nil
             }
-            current = parent(of: current)
+            current = current.dirname
         }
     }
 
     static func materialize(
-        virtualRoot: String,
-        filesystem: any ShellFilesystem
+        virtualRoot: WorkspacePath,
+        filesystem: any FileSystem
     ) async throws -> GitRepositoryProjection {
         let tempBase = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
         let tempDirectory = tempBase.appendingPathComponent("BashGit-\(UUID().uuidString)", isDirectory: true)
@@ -986,8 +972,8 @@ private enum GitFilesystemProjection {
 
     static func syncFromLocal(
         localRoot: URL,
-        toFilesystemRoot virtualRoot: String,
-        filesystem: any ShellFilesystem
+        toFilesystemRoot virtualRoot: WorkspacePath,
+        filesystem: any FileSystem
     ) async throws {
         if await !filesystem.exists(path: virtualRoot) {
             try await filesystem.createDirectory(path: virtualRoot, recursive: true)
@@ -1004,20 +990,20 @@ private enum GitFilesystemProjection {
         }.sorted { depth(of: $0) < depth(of: $1) }
 
         for relativePath in localDirectoryPaths {
-            let fullPath = join(virtualRoot, relativePath)
+            let fullPath = virtualRoot.appending(relativePath)
             if await !filesystem.exists(path: fullPath) {
                 try await filesystem.createDirectory(path: fullPath, recursive: true)
             }
         }
 
         for (relativePath, entry) in localEntries {
-            let fullPath = join(virtualRoot, relativePath)
+            let fullPath = virtualRoot.appending(relativePath)
             switch entry {
             case let .directory(permissions):
                 if await !filesystem.exists(path: fullPath) {
                     try await filesystem.createDirectory(path: fullPath, recursive: true)
                 }
-                try? await filesystem.setPermissions(path: fullPath, permissions: permissions)
+                try? await filesystem.setPermissions(path: fullPath, permissions: POSIXPermissions(permissions))
 
             case let .file(url, permissions):
                 if let existing = filesystemEntries[relativePath], case .directory = existing {
@@ -1025,36 +1011,36 @@ private enum GitFilesystemProjection {
                 }
                 let data = try Data(contentsOf: url)
                 try await filesystem.writeFile(path: fullPath, data: data, append: false)
-                try? await filesystem.setPermissions(path: fullPath, permissions: permissions)
+                try? await filesystem.setPermissions(path: fullPath, permissions: POSIXPermissions(permissions))
 
             case let .symlink(target, permissions):
                 if await filesystem.exists(path: fullPath) {
                     try? await filesystem.remove(path: fullPath, recursive: true)
                 }
                 try await filesystem.createSymlink(path: fullPath, target: target)
-                try? await filesystem.setPermissions(path: fullPath, permissions: permissions)
+                try? await filesystem.setPermissions(path: fullPath, permissions: POSIXPermissions(permissions))
             }
         }
 
         let stalePaths = filesystemEntries.keys.filter { localEntries[$0] == nil }.sorted { depth(of: $0) > depth(of: $1) }
         for relativePath in stalePaths {
-            let fullPath = join(virtualRoot, relativePath)
+            let fullPath = virtualRoot.appending(relativePath)
             try? await filesystem.remove(path: fullPath, recursive: true)
         }
     }
 
     private static func copyFilesystemTree(
-        filesystem: any ShellFilesystem,
-        virtualPath: String,
+        filesystem: any FileSystem,
+        virtualPath: WorkspacePath,
         localURL: URL
     ) async throws {
         let info = try await filesystem.stat(path: virtualPath)
         if info.isDirectory {
             try FileManager.default.createDirectory(at: localURL, withIntermediateDirectories: true)
-            try setPermissions(url: localURL, permissions: info.permissions)
+            try setPermissions(url: localURL, permissions: info.permissionBits)
             let entries = try await filesystem.listDirectory(path: virtualPath)
             for entry in entries {
-                let childVirtualPath = join(virtualPath, entry.name)
+                let childVirtualPath = virtualPath.appending(entry.name)
                 let childLocalURL = localURL.appendingPathComponent(entry.name, isDirectory: entry.info.isDirectory)
                 if entry.info.isDirectory {
                     try await copyFilesystemTree(
@@ -1065,12 +1051,12 @@ private enum GitFilesystemProjection {
                 } else if entry.info.isSymbolicLink {
                     let target = try await filesystem.readSymlink(path: childVirtualPath)
                     try FileManager.default.createSymbolicLink(atPath: childLocalURL.path, withDestinationPath: target)
-                    try setPermissions(url: childLocalURL, permissions: entry.info.permissions)
+                    try setPermissions(url: childLocalURL, permissions: entry.info.permissionBits)
                 } else {
                     let data = try await filesystem.readFile(path: childVirtualPath)
                     try FileManager.default.createDirectory(at: childLocalURL.deletingLastPathComponent(), withIntermediateDirectories: true)
                     try data.write(to: childLocalURL, options: .atomic)
-                    try setPermissions(url: childLocalURL, permissions: entry.info.permissions)
+                    try setPermissions(url: childLocalURL, permissions: entry.info.permissionBits)
                 }
             }
             return
@@ -1080,14 +1066,14 @@ private enum GitFilesystemProjection {
             let target = try await filesystem.readSymlink(path: virtualPath)
             try FileManager.default.createDirectory(at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
             try FileManager.default.createSymbolicLink(atPath: localURL.path, withDestinationPath: target)
-            try setPermissions(url: localURL, permissions: info.permissions)
+            try setPermissions(url: localURL, permissions: info.permissionBits)
             return
         }
 
         let data = try await filesystem.readFile(path: virtualPath)
         try FileManager.default.createDirectory(at: localURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try data.write(to: localURL, options: .atomic)
-        try setPermissions(url: localURL, permissions: info.permissions)
+        try setPermissions(url: localURL, permissions: info.permissionBits)
     }
 
     private static func scanLocalEntries(localRoot: URL) throws -> [String: LocalEntryType] {
@@ -1129,8 +1115,8 @@ private enum GitFilesystemProjection {
     }
 
     private static func scanFilesystemEntries(
-        filesystem: any ShellFilesystem,
-        root: String
+        filesystem: any FileSystem,
+        root: WorkspacePath
     ) async throws -> [String: RemoteEntryType] {
         var entries: [String: RemoteEntryType] = [:]
         if await !filesystem.exists(path: root) {
@@ -1146,15 +1132,15 @@ private enum GitFilesystemProjection {
     }
 
     private static func scanFilesystemEntries(
-        filesystem: any ShellFilesystem,
-        absolutePath: String,
+        filesystem: any FileSystem,
+        absolutePath: WorkspacePath,
         relativePath: String,
         output: inout [String: RemoteEntryType]
     ) async throws {
         let listing = try await filesystem.listDirectory(path: absolutePath)
         for entry in listing {
             let childRelative = relativePath.isEmpty ? entry.name : relativePath + "/" + entry.name
-            let childAbsolute = join(absolutePath, entry.name)
+            let childAbsolute = absolutePath.appending(entry.name)
             if entry.info.isDirectory {
                 output[childRelative] = .directory
                 try await scanFilesystemEntries(
@@ -1188,38 +1174,6 @@ private enum GitFilesystemProjection {
             return ""
         }
         return String(absolutePath.dropFirst(rootPath.count + 1))
-    }
-
-    private static func normalizeAbsolute(_ path: String) -> String {
-        let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        if parts.isEmpty {
-            return "/"
-        }
-        return "/" + parts.joined(separator: "/")
-    }
-
-    private static func join(_ lhs: String, _ rhs: String) -> String {
-        if rhs.hasPrefix("/") {
-            return normalizeAbsolute(rhs)
-        }
-        let normalizedLHS = normalizeAbsolute(lhs)
-        if normalizedLHS == "/" {
-            return "/" + rhs
-        }
-        return normalizedLHS + "/" + rhs
-    }
-
-    private static func parent(of path: String) -> String {
-        let normalized = normalizeAbsolute(path)
-        if normalized == "/" {
-            return "/"
-        }
-        var parts = normalized.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
-        _ = parts.popLast()
-        if parts.isEmpty {
-            return "/"
-        }
-        return "/" + parts.joined(separator: "/")
     }
 
     private static func depth(of path: String) -> Int {

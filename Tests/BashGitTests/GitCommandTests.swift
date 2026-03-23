@@ -148,7 +148,7 @@ struct GitCommandTests {
     @Test("clone remote repository respects network policy")
     func cloneRemoteRepositoryRespectsNetworkPolicy() async throws {
         let (session, root) = try await GitTestSupport.makeReadWriteSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 denyPrivateRanges: true
             )
@@ -163,7 +163,7 @@ struct GitCommandTests {
     @Test("clone ssh-style repository respects host allowlist")
     func cloneSSHStyleRepositoryRespectsHostAllowlist() async throws {
         let (session, root) = try await GitTestSupport.makeReadWriteSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 allowedHosts: ["gitlab.com"]
             )

@@ -140,27 +140,27 @@ public struct DefaultSecretOutputRedactor: SecretOutputRedacting {
 }
 
 public struct SessionOptions: Sendable {
-    public var filesystem: any ShellFilesystem
+    public var filesystem: any FileSystem
     public var layout: SessionLayout
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
-    public var networkPolicy: NetworkPolicy
+    public var networkPolicy: ShellNetworkPolicy
     public var executionLimits: ExecutionLimits
-    public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
+    public var permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
     public var secretOutputRedactor: any SecretOutputRedacting
 
     public init(
-        filesystem: any ShellFilesystem = ReadWriteFilesystem(),
+        filesystem: any FileSystem = ReadWriteFilesystem(),
         layout: SessionLayout = .unixLike,
         initialEnvironment: [String: String] = [:],
         enableGlobbing: Bool = true,
         maxHistory: Int = 1_000,
-        networkPolicy: NetworkPolicy = .disabled,
+        networkPolicy: ShellNetworkPolicy = .disabled,
         executionLimits: ExecutionLimits = .default,
-        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil,
         secretPolicy: SecretHandlingPolicy = .off,
         secretResolver: (any SecretReferenceResolving)? = nil,
         secretOutputRedactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()

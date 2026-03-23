@@ -20,7 +20,7 @@ struct ShellWord: Sendable {
 
     var hasUnquotedWildcard: Bool {
         parts.contains { part in
-            part.quote == .none && PathUtils.containsGlob(part.text)
+            part.quote == .none && WorkspacePath.containsGlob(part.text)
         }
     }
 }

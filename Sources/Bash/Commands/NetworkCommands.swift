@@ -618,7 +618,7 @@ struct CurlCommand: BuiltinCommand {
             return .failure(3)
         }
 
-        let filesystemPath = PathUtils.normalize(path: decodedPath, currentDirectory: "/")
+        let filesystemPath = WorkspacePath(normalizing: decodedPath)
         do {
             let data = try await context.filesystem.readFile(path: filesystemPath)
             let effectiveBody = method == "HEAD" ? Data() : data
@@ -632,7 +632,7 @@ struct CurlCommand: BuiltinCommand {
                 )
             )
         } catch {
-            context.writeStderr("curl: \(filesystemPath): \(error)\n")
+            context.writeStderr("curl: \(filesystemPath.string): \(error)\n")
             return .failure(37)
         }
     }
@@ -1010,7 +1010,7 @@ struct CurlCommand: BuiltinCommand {
                     return .failure(26)
                 }
 
-                let filename = PathUtils.basename(filePath)
+                let filename = WorkspacePath.basename(filePath)
                 append("Content-Disposition: form-data; name=\"\(name)\"; filename=\"\(filename)\"\r\n")
                 append("Content-Type: \(explicitType ?? "application/octet-stream")\r\n\r\n")
                 body.append(fileData)
@@ -1374,7 +1374,7 @@ struct WgetCommand: BuiltinCommand {
             return "index.html"
         }
 
-        let basename = PathUtils.basename(path)
+        let basename = WorkspacePath.basename(path)
         if basename.isEmpty || basename == "/" {
             return "index.html"
         }

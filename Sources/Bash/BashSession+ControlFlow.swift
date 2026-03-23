@@ -978,9 +978,9 @@ extension BashSession {
                     exitCode: value.isEmpty ? 0 : 1
                 )
             case "-e", "-f", "-d":
-                let path = PathUtils.normalize(
-                    path: value,
-                    currentDirectory: currentDirectoryStore
+                let path = WorkspacePath(
+                    normalizing: value,
+                    relativeTo: WorkspacePath(normalizing: currentDirectoryStore)
                 )
                 guard await filesystemStore.exists(path: path) else {
                     return CommandResult(stdout: Data(), stderr: Data(), exitCode: 1)
@@ -1145,9 +1145,9 @@ extension BashSession {
                     targetWord,
                     environment: environmentStore
                 )
-                let path = PathUtils.normalize(
-                    path: target,
-                    currentDirectory: currentDirectoryStore
+                let path = WorkspacePath(
+                    normalizing: target,
+                    relativeTo: WorkspacePath(normalizing: currentDirectoryStore)
                 )
                 do {
                     try await filesystemStore.writeFile(
@@ -1166,9 +1166,9 @@ extension BashSession {
                     targetWord,
                     environment: environmentStore
                 )
-                let path = PathUtils.normalize(
-                    path: target,
-                    currentDirectory: currentDirectoryStore
+                let path = WorkspacePath(
+                    normalizing: target,
+                    relativeTo: WorkspacePath(normalizing: currentDirectoryStore)
                 )
                 do {
                     try await filesystemStore.writeFile(
@@ -1187,9 +1187,9 @@ extension BashSession {
                     targetWord,
                     environment: environmentStore
                 )
-                let path = PathUtils.normalize(
-                    path: target,
-                    currentDirectory: currentDirectoryStore
+                let path = WorkspacePath(
+                    normalizing: target,
+                    relativeTo: WorkspacePath(normalizing: currentDirectoryStore)
                 )
                 var combined = Data()
                 combined.append(result.stdout)
@@ -1519,7 +1519,7 @@ extension BashSession {
         environment: [String: String]
     ) -> Bool {
         let expanded = evaluateCaseWord(rawPattern, environment: environment)
-        guard let regex = try? NSRegularExpression(pattern: PathUtils.globToRegex(expanded)) else {
+        guard let regex = try? NSRegularExpression(pattern: WorkspacePath.globToRegex(expanded)) else {
             return expanded == value
         }
 

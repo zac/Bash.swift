@@ -6,10 +6,10 @@ import Darwin
 import Glibc
 #endif
 
-public struct PermissionRequest: Sendable, Hashable {
+public struct ShellPermissionRequest: Sendable, Hashable {
     public enum Kind: Sendable, Hashable {
-        case network(NetworkPermissionRequest)
-        case filesystem(FilesystemPermissionRequest)
+        case network(ShellNetworkPermissionRequest)
+        case filesystem(ShellFilesystemPermissionRequest)
     }
 
     public var command: String
@@ -21,7 +21,7 @@ public struct PermissionRequest: Sendable, Hashable {
     }
 }
 
-public struct NetworkPermissionRequest: Sendable, Hashable {
+public struct ShellNetworkPermissionRequest: Sendable, Hashable {
     public var url: String
     public var method: String
 
@@ -31,7 +31,7 @@ public struct NetworkPermissionRequest: Sendable, Hashable {
     }
 }
 
-public enum FilesystemPermissionOperation: String, Sendable, Hashable {
+public enum ShellFilesystemPermissionOperation: String, Sendable, Hashable {
     case stat
     case listDirectory
     case readFile
@@ -49,8 +49,8 @@ public enum FilesystemPermissionOperation: String, Sendable, Hashable {
     case glob
 }
 
-public struct FilesystemPermissionRequest: Sendable, Hashable {
-    public var operation: FilesystemPermissionOperation
+public struct ShellFilesystemPermissionRequest: Sendable, Hashable {
+    public var operation: ShellFilesystemPermissionOperation
     public var path: String?
     public var sourcePath: String?
     public var destinationPath: String?
@@ -58,7 +58,7 @@ public struct FilesystemPermissionRequest: Sendable, Hashable {
     public var recursive: Bool
 
     public init(
-        operation: FilesystemPermissionOperation,
+        operation: ShellFilesystemPermissionOperation,
         path: String? = nil,
         sourcePath: String? = nil,
         destinationPath: String? = nil,
@@ -74,9 +74,9 @@ public struct FilesystemPermissionRequest: Sendable, Hashable {
     }
 }
 
-public struct NetworkPolicy: Sendable {
-    public static let disabled = NetworkPolicy()
-    public static let unrestricted = NetworkPolicy(allowsHTTPRequests: true)
+public struct ShellNetworkPolicy: Sendable {
+    public static let disabled = ShellNetworkPolicy()
+    public static let unrestricted = ShellNetworkPolicy(allowsHTTPRequests: true)
 
     public var allowsHTTPRequests: Bool
     public var allowedHosts: [String]
@@ -100,32 +100,32 @@ public struct NetworkPolicy: Sendable {
     }
 }
 
-public enum PermissionDecision: Sendable {
+public enum ShellPermissionDecision: Sendable {
     case allow
     case allowForSession
     case deny(message: String?)
 }
 
-public protocol PermissionAuthorizing: Sendable {
-    func authorize(_ request: PermissionRequest) async -> PermissionDecision
+public protocol ShellPermissionAuthorizing: Sendable {
+    func authorize(_ request: ShellPermissionRequest) async -> ShellPermissionDecision
 }
 
-actor PermissionAuthorizer: PermissionAuthorizing {
-    typealias Handler = @Sendable (PermissionRequest) async -> PermissionDecision
+actor ShellPermissionAuthorizer: ShellPermissionAuthorizing {
+    typealias Handler = @Sendable (ShellPermissionRequest) async -> ShellPermissionDecision
 
-    private let networkPolicy: NetworkPolicy
+    private let networkPolicy: ShellNetworkPolicy
     private let handler: Handler?
-    private var sessionAllows: Set<PermissionRequest> = []
+    private var sessionAllows: Set<ShellPermissionRequest> = []
 
     init(
-        networkPolicy: NetworkPolicy = .disabled,
+        networkPolicy: ShellNetworkPolicy = .disabled,
         handler: Handler? = nil
     ) {
         self.networkPolicy = networkPolicy
         self.handler = handler
     }
 
-    func authorize(_ request: PermissionRequest) async -> PermissionDecision {
+    func authorize(_ request: ShellPermissionRequest) async -> ShellPermissionDecision {
         if let denial = PermissionPolicyEvaluator.denialMessage(
             for: request,
             networkPolicy: networkPolicy
@@ -151,9 +151,9 @@ actor PermissionAuthorizer: PermissionAuthorizing {
     }
 
     func authorize(
-        _ request: PermissionRequest,
+        _ request: ShellPermissionRequest,
         pausing executionControl: ExecutionControl?
-    ) async -> PermissionDecision {
+    ) async -> ShellPermissionDecision {
         if let denial = PermissionPolicyEvaluator.denialMessage(
             for: request,
             networkPolicy: networkPolicy
@@ -189,11 +189,11 @@ actor PermissionAuthorizer: PermissionAuthorizing {
 }
 
 func authorizePermissionRequest(
-    _ request: PermissionRequest,
-    using authorizer: any PermissionAuthorizing,
+    _ request: ShellPermissionRequest,
+    using authorizer: any ShellPermissionAuthorizing,
     pausing executionControl: ExecutionControl?
-) async -> PermissionDecision {
-    if let authorizer = authorizer as? PermissionAuthorizer {
+) async -> ShellPermissionDecision {
+    if let authorizer = authorizer as? ShellPermissionAuthorizer {
         return await authorizer.authorize(request, pausing: executionControl)
     }
 
@@ -212,8 +212,8 @@ func authorizePermissionRequest(
 
 private enum PermissionPolicyEvaluator {
     static func denialMessage(
-        for request: PermissionRequest,
-        networkPolicy: NetworkPolicy
+        for request: ShellPermissionRequest,
+        networkPolicy: ShellNetworkPolicy
     ) -> String? {
         switch request.kind {
         case let .network(networkRequest):
@@ -224,8 +224,8 @@ private enum PermissionPolicyEvaluator {
     }
 
     private static func denialMessage(
-        for request: NetworkPermissionRequest,
-        networkPolicy: NetworkPolicy
+        for request: ShellNetworkPermissionRequest,
+        networkPolicy: ShellNetworkPolicy
     ) -> String? {
         guard networkPolicy.allowsHTTPRequests else {
             return "network access denied by policy: outbound HTTP(S) access is disabled"

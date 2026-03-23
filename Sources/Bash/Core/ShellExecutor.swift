@@ -17,7 +17,7 @@ enum ShellExecutor {
     static func execute(
         parsedLine: ParsedLine,
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
@@ -25,7 +25,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -163,7 +163,7 @@ enum ShellExecutor {
     private static func executePipeline(
         commands: [ParsedCommand],
         initialInput: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -171,7 +171,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -215,7 +215,7 @@ enum ShellExecutor {
     private static func executeSingleCommand(
         _ command: ParsedCommand,
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -223,7 +223,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -238,11 +238,11 @@ enum ShellExecutor {
             )
         }
 
-        let baseFilesystem = PermissionedShellFilesystem.unwrap(filesystem)
+        let baseFilesystem = ShellPermissionedFileSystem.unwrap(filesystem)
         let initialCommandName = command.words.first?.rawValue.isEmpty == false
             ? command.words.first!.rawValue
             : "shell"
-        let expansionFilesystem = PermissionedShellFilesystem(
+        let expansionFilesystem = ShellPermissionedFileSystem(
             base: baseFilesystem,
             commandName: initialCommandName,
             permissionAuthorizer: permissionAuthorizer,
@@ -293,7 +293,7 @@ enum ShellExecutor {
 
             do {
                 input = try await expansionFilesystem.readFile(
-                    path: PathUtils.normalize(path: target, currentDirectory: currentDirectory)
+                    path: WorkspacePath(normalizing: target, relativeTo: WorkspacePath(normalizing: currentDirectory))
                 )
             } catch {
                 stderr.append(Data("\(target): \(error)\n".utf8))
@@ -314,7 +314,7 @@ enum ShellExecutor {
         }
 
         let commandArgs = Array(expandedWords.dropFirst())
-        let commandFilesystem = PermissionedShellFilesystem(
+        let commandFilesystem = ShellPermissionedFileSystem(
             base: baseFilesystem,
             commandName: commandName,
             permissionAuthorizer: permissionAuthorizer,
@@ -401,7 +401,10 @@ enum ShellExecutor {
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
+                    )
                     let redactedOutput = await redactForExternalOutput(
                         result.stdout,
                         secretTracker: secretTracker,
@@ -428,7 +431,10 @@ enum ShellExecutor {
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
+                    )
                     let redactedStderr = await redactForExternalOutput(
                         result.stderr,
                         secretTracker: secretTracker,
@@ -458,7 +464,10 @@ enum ShellExecutor {
                 )
 
                 do {
-                    let path = PathUtils.normalize(path: target, currentDirectory: currentDirectory)
+                    let path = WorkspacePath(
+                        normalizing: target,
+                        relativeTo: WorkspacePath(normalizing: currentDirectory)
+                    )
                     let redactedStdout = await redactForExternalOutput(
                         result.stdout,
                         secretTracker: secretTracker,
@@ -495,7 +504,7 @@ enum ShellExecutor {
         _ body: String,
         functionArguments: [String],
         stdin: Data,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: inout String,
         environment: inout [String: String],
         history: [String],
@@ -503,7 +512,7 @@ enum ShellExecutor {
         shellFunctions: [String: String],
         enableGlobbing: Bool,
         jobControl: (any ShellJobControlling)?,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -623,7 +632,7 @@ enum ShellExecutor {
 
     private static func resolveCommand(named commandName: String, registry: [String: AnyBuiltinCommand]) -> AnyBuiltinCommand? {
         if commandName.hasPrefix("/") {
-            let base = PathUtils.basename(commandName)
+            let base = WorkspacePath.basename(commandName)
             return registry[base]
         }
 
@@ -632,7 +641,7 @@ enum ShellExecutor {
         }
 
         if commandName.contains("/") {
-            return registry[PathUtils.basename(commandName)]
+            return registry[WorkspacePath.basename(commandName)]
         }
 
         return nil
@@ -804,7 +813,7 @@ enum ShellExecutor {
 
     private static func expandWords(
         _ words: [ShellWord],
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -827,7 +836,7 @@ enum ShellExecutor {
 
     private static func firstExpansion(
         word: ShellWord,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -844,7 +853,7 @@ enum ShellExecutor {
 
     private static func expandWord(
         _ word: ShellWord,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         enableGlobbing: Bool
@@ -860,13 +869,16 @@ enum ShellExecutor {
             }
         }
 
-        guard enableGlobbing, word.hasUnquotedWildcard, PathUtils.containsGlob(combined) else {
+        guard enableGlobbing, word.hasUnquotedWildcard, WorkspacePath.containsGlob(combined) else {
             return [combined]
         }
 
         do {
-            let matches = try await filesystem.glob(pattern: combined, currentDirectory: currentDirectory)
-            return matches.isEmpty ? [combined] : matches
+            let matches = try await filesystem.glob(
+                pattern: combined,
+                currentDirectory: WorkspacePath(normalizing: currentDirectory)
+            )
+            return matches.isEmpty ? [combined] : matches.map(\.string)
         } catch {
             return [combined]
         }
@@ -981,14 +993,14 @@ enum ShellExecutor {
 
     private static func expandHereDocumentBody(
         _ hereDocument: HereDocument,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -1024,14 +1036,14 @@ enum ShellExecutor {
 
     private static func expandUnquotedHereDocumentText(
         _ text: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -1228,14 +1240,14 @@ enum ShellExecutor {
 
     private static func expandCommandSubstitutionsInCommandText(
         _ commandLine: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,
@@ -1412,14 +1424,14 @@ enum ShellExecutor {
 
     private static func evaluateCommandSubstitutionInCommandText(
         _ command: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         currentDirectory: String,
         environment: [String: String],
         history: [String],
         commandRegistry: [String: AnyBuiltinCommand],
         shellFunctions: [String: String],
         enableGlobbing: Bool,
-        permissionAuthorizer: any PermissionAuthorizing,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
         executionControl: ExecutionControl?,
         secretPolicy: SecretHandlingPolicy,
         secretResolver: (any SecretReferenceResolving)?,

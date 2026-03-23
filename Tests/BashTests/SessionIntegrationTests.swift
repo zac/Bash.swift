@@ -3,13 +3,13 @@ import Testing
 @testable import Bash
 
 actor PermissionProbe {
-    private var requests: [PermissionRequest] = []
+    private var requests: [ShellPermissionRequest] = []
 
-    func record(_ request: PermissionRequest) {
+    func record(_ request: ShellPermissionRequest) {
         requests.append(request)
     }
 
-    func snapshot() -> [PermissionRequest] {
+    func snapshot() -> [ShellPermissionRequest] {
         requests
     }
 }
@@ -1821,7 +1821,7 @@ struct SessionIntegrationTests {
     @Test("curl network policy can deny private ranges")
     func curlNetworkPolicyCanDenyPrivateRanges() async throws {
         let (session, root) = try await TestSupport.makeSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 denyPrivateRanges: true
             )
@@ -1836,7 +1836,7 @@ struct SessionIntegrationTests {
     @Test("curl network policy can deny urls outside allowlist")
     func curlNetworkPolicyCanDenyURLsOutsideAllowlist() async throws {
         let (session, root) = try await TestSupport.makeSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 allowedURLPrefixes: ["https://api.example.com/"]
             )
@@ -1861,7 +1861,7 @@ struct SessionIntegrationTests {
     @Test("curl allowlist matches path boundaries instead of raw prefixes")
     func curlAllowlistMatchesPathBoundariesInsteadOfRawPrefixes() async throws {
         let (session, root) = try await TestSupport.makeSession(
-            networkPolicy: NetworkPolicy(
+            networkPolicy: ShellNetworkPolicy(
                 allowsHTTPRequests: true,
                 allowedURLPrefixes: ["https://api.example.com/v1"]
             )

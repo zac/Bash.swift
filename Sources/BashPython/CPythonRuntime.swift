@@ -120,7 +120,7 @@ public actor CPythonRuntime: PythonRuntime {
 
     public func execute(
         request: PythonExecutionRequest,
-        filesystem: any ShellFilesystem
+        filesystem: any FileSystem
     ) async -> PythonExecutionResult {
         do {
             let runtime = try ensureRuntime()
@@ -237,10 +237,10 @@ public actor CPythonRuntime: PythonRuntime {
 
 private final class CPythonFilesystemBridge: @unchecked Sendable {
     private let lock = NSLock()
-    private var filesystem: (any ShellFilesystem)?
+    private var filesystem: (any FileSystem)?
     private var currentDirectory: String = "/"
 
-    func setContext(filesystem: any ShellFilesystem, currentDirectory: String) {
+    func setContext(filesystem: any FileSystem, currentDirectory: String) {
         lock.lock()
         defer { lock.unlock() }
         self.filesystem = filesystem
@@ -309,7 +309,7 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
                         "isFile": !info.isDirectory,
                         "isDirectory": info.isDirectory,
                         "isSymbolicLink": info.isSymbolicLink,
-                        "mode": info.permissions,
+                        "mode": info.permissionBits,
                         "size": info.size,
                         "mtime": mtime,
                     ]
@@ -398,7 +398,7 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
                     guard let filesystem = self.snapshot().filesystem else {
                         throw CPythonRuntimeError.unavailable("filesystem bridge is not active")
                     }
-                    try await filesystem.setPermissions(path: path, permissions: mode)
+                    try await filesystem.setPermissions(path: path, permissions: POSIXPermissions(mode))
                 }
                 return response(success: [:])
 
@@ -410,7 +410,7 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
                     }
                     return try await filesystem.resolveRealPath(path: path)
                 }
-                return response(success: ["path": value])
+                return response(success: ["path": value.string])
 
             default:
                 return response(error: "unsupported operation: \(op)")
@@ -420,13 +420,13 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
         }
     }
 
-    private func snapshot() -> (filesystem: (any ShellFilesystem)?, currentDirectory: String) {
+    private func snapshot() -> (filesystem: (any FileSystem)?, currentDirectory: String) {
         lock.lock()
         defer { lock.unlock() }
         return (filesystem, currentDirectory)
     }
 
-    private func resolvedPath(from payload: [String: Any]) throws -> String {
+    private func resolvedPath(from payload: [String: Any]) throws -> WorkspacePath {
         guard let path = payload["path"] as? String else {
             throw CPythonRuntimeError.executionFailed("filesystem path is required")
         }
@@ -435,37 +435,11 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
         return normalize(path: path, currentDirectory: snapshot.currentDirectory)
     }
 
-    private func normalize(path: String, currentDirectory: String) -> String {
-        if path.isEmpty {
-            return currentDirectory
-        }
-
-        let base: [String]
-        if path.hasPrefix("/") {
-            base = []
-        } else {
-            base = splitComponents(currentDirectory)
-        }
-
-        var parts = base
-        for piece in path.split(separator: "/", omittingEmptySubsequences: true) {
-            switch piece {
-            case ".":
-                continue
-            case "..":
-                if !parts.isEmpty {
-                    parts.removeLast()
-                }
-            default:
-                parts.append(String(piece))
-            }
-        }
-
-        return "/" + parts.joined(separator: "/")
-    }
-
-    private func splitComponents(_ absolutePath: String) -> [String] {
-        absolutePath.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+    private func normalize(path: String, currentDirectory: String) -> WorkspacePath {
+        WorkspacePath(
+            normalizing: path,
+            relativeTo: WorkspacePath(normalizing: currentDirectory)
+        )
     }
 
     private func runBlocking<T>(_ operation: @escaping @Sendable () async throws -> T) throws -> T {
@@ -512,11 +486,11 @@ private final class CPythonFilesystemBridge: @unchecked Sendable {
 private final class CPythonNetworkBridge: @unchecked Sendable {
     private let lock = NSLock()
     private var commandName = "python3"
-    private var permissionAuthorizer: (any PermissionAuthorizing)?
+    private var permissionAuthorizer: (any ShellPermissionAuthorizing)?
 
     func setContext(
         commandName: String,
-        permissionAuthorizer: (any PermissionAuthorizing)?
+        permissionAuthorizer: (any ShellPermissionAuthorizing)?
     ) {
         lock.lock()
         defer { lock.unlock() }
@@ -549,9 +523,9 @@ private final class CPythonNetworkBridge: @unchecked Sendable {
             return response(success: [:])
         }
 
-        let request = PermissionRequest(
+        let request = ShellPermissionRequest(
             command: snapshot.commandName,
-            kind: .network(NetworkPermissionRequest(url: url, method: method))
+            kind: .network(ShellNetworkPermissionRequest(url: url, method: method))
         )
 
         do {
@@ -567,7 +541,7 @@ private final class CPythonNetworkBridge: @unchecked Sendable {
         }
     }
 
-    private func snapshot() -> (commandName: String, permissionAuthorizer: (any PermissionAuthorizing)?) {
+    private func snapshot() -> (commandName: String, permissionAuthorizer: (any ShellPermissionAuthorizing)?) {
         lock.lock()
         defer { lock.unlock() }
         return (commandName, permissionAuthorizer)

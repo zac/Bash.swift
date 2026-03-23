@@ -11,8 +11,8 @@ enum GitTestSupport {
     }
 
     static func makeReadWriteSession(
-        networkPolicy: NetworkPolicy = .unrestricted,
-        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
+        networkPolicy: ShellNetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil
     ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
         let session = try await BashSession(
@@ -29,8 +29,8 @@ enum GitTestSupport {
     }
 
     static func makeInMemorySession(
-        networkPolicy: NetworkPolicy = .unrestricted,
-        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
+        networkPolicy: ShellNetworkPolicy = .unrestricted,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil
     ) async throws -> BashSession {
         let session = try await BashSession(
             options: SessionOptions(

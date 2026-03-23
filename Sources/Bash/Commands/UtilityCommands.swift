@@ -927,20 +927,23 @@ struct WhichCommand: BuiltinCommand {
         for name: String,
         searchPaths: [String],
         currentDirectory: String,
-        filesystem: any ShellFilesystem,
+        filesystem: any FileSystem,
         includeAll: Bool
     ) async -> [String] {
         if name.contains("/") {
-            let resolved = PathUtils.normalize(path: name, currentDirectory: currentDirectory)
-            return await filesystem.exists(path: resolved) ? [resolved] : []
+            let resolved = WorkspacePath(normalizing: name, relativeTo: WorkspacePath(normalizing: currentDirectory))
+            return await filesystem.exists(path: resolved) ? [resolved.string] : []
         }
 
         var matches: [String] = []
         for path in searchPaths {
-            let normalizedPath = PathUtils.normalize(path: path, currentDirectory: currentDirectory)
-            let candidate = PathUtils.join(normalizedPath, name)
+            let normalizedPath = WorkspacePath(
+                normalizing: path,
+                relativeTo: WorkspacePath(normalizing: currentDirectory)
+            )
+            let candidate = normalizedPath.appending(name)
             if await filesystem.exists(path: candidate) {
-                matches.append(candidate)
+                matches.append(candidate.string)
                 if !includeAll {
                     break
                 }

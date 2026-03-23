@@ -10,11 +10,11 @@ enum TestSupport {
     }
 
     static func makeSession(
-        filesystem: (any ShellFilesystem)? = nil,
+        filesystem: (any FileSystem)? = nil,
         layout: SessionLayout = .unixLike,
         enableGlobbing: Bool = true,
-        networkPolicy: NetworkPolicy = .disabled,
-        permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)? = nil
+        networkPolicy: ShellNetworkPolicy = .disabled,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil
     ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
         let options = SessionOptions(

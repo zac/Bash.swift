@@ -22,7 +22,7 @@ enum SecretsTestSupport {
 
     static func makeSecretAwareSession(
         policy: SecretHandlingPolicy,
-        networkPolicy: NetworkPolicy = .disabled
+        networkPolicy: ShellNetworkPolicy = .disabled
     ) async throws -> (session: BashSession, root: URL) {
         try await makeSession(
             options: SessionOptions(
