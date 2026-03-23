@@ -130,7 +130,7 @@ print(py.stdoutString) // hi
 On other Apple platforms, including iOS/iPadOS, Mac Catalyst, tvOS, and watchOS, the module still compiles but runtime execution returns an unavailable error.
 Maintainer notes for the broader Apple runtime plan live in [`docs/cpython-apple-runtime.md`](docs/cpython-apple-runtime.md).
 
-Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through `ShellFilesystem`, so Python file operations share the same jailed root as shell commands.
+Strict filesystem mode is enabled by default. Script-visible file APIs are shimmed through the reexported `FileSystem` layer, so Python file operations share the same jailed root as shell commands.
 Blocked escape APIs include `subprocess`, `ctypes`, and process-spawn helpers like `os.system` / `os.popen` / `os.spawn*`.
 `SessionOptions.networkPolicy` and `permissionHandler` also apply to Python socket connections, so host apps can enforce the same outbound rules across shell commands and embedded Python.
 `pip` and arbitrary native extension loading are non-goals in this runtime profile.
@@ -207,9 +207,9 @@ Import `Workspace` from that package directly when you want workspace tooling wi
 ```swift
 import Workspace
 
-let filesystem = PermissionedWorkspaceFilesystem(
+let filesystem = PermissionedFileSystem(
     base: try OverlayFilesystem(rootDirectory: workspaceRoot),
-    authorizer: WorkspacePermissionAuthorizer { request in
+    authorizer: PermissionAuthorizer { request in
         switch request.operation {
         case .readFile, .listDirectory, .stat:
             return .allowForSession
@@ -285,25 +285,25 @@ public struct ExecutionLimits {
 
 Each `run` executes under an `ExecutionLimits` budget. Exceeding a structural limit stops execution with exit code `2`. If `maxWallClockDuration` is exceeded, execution stops with exit code `124`. If `cancellationCheck` returns `true`, or the surrounding task is cancelled, execution stops with exit code `130`. Wall-clock accounting excludes time spent waiting on host permission callbacks.
 
-### `PermissionRequest` and `PermissionDecision`
+### `ShellPermissionRequest` and `ShellPermissionDecision`
 
 ```swift
-public struct PermissionRequest {
+public struct ShellPermissionRequest {
     public enum Kind {
-        case network(NetworkPermissionRequest)
-        case filesystem(FilesystemPermissionRequest)
+        case network(ShellNetworkPermissionRequest)
+        case filesystem(ShellFilesystemPermissionRequest)
     }
 
     public var command: String
     public var kind: Kind
 }
 
-public struct NetworkPermissionRequest {
+public struct ShellNetworkPermissionRequest {
     public var url: String
     public var method: String
 }
 
-public enum FilesystemPermissionOperation: String {
+public enum ShellFilesystemPermissionOperation: String {
     case stat
     case listDirectory
     case readFile
@@ -321,8 +321,8 @@ public enum FilesystemPermissionOperation: String {
     case glob
 }
 
-public struct FilesystemPermissionRequest {
-    public var operation: FilesystemPermissionOperation
+public struct ShellFilesystemPermissionRequest {
+    public var operation: ShellFilesystemPermissionOperation
     public var path: String?
     public var sourcePath: String?
     public var destinationPath: String?
@@ -330,19 +330,19 @@ public struct FilesystemPermissionRequest {
     public var recursive: Bool
 }
 
-public enum PermissionDecision {
+public enum ShellPermissionDecision {
     case allow
     case allowForSession
     case deny(message: String?)
 }
 ```
 
-### `NetworkPolicy`
+### `ShellNetworkPolicy`
 
 ```swift
-public struct NetworkPolicy {
-    public static let disabled: NetworkPolicy
-    public static let unrestricted: NetworkPolicy
+public struct ShellNetworkPolicy {
+    public static let disabled: ShellNetworkPolicy
+    public static let unrestricted: ShellNetworkPolicy
 
     public var allowsHTTPRequests: Bool
     public var allowedHosts: [String]
@@ -357,14 +357,14 @@ Outbound HTTP(S) is disabled by default. Use `.unrestricted` or set `allowsHTTPR
 
 ```swift
 public struct SessionOptions {
-    public var filesystem: any ShellFilesystem
+    public var filesystem: any FileSystem
     public var layout: SessionLayout
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
     public var maxHistory: Int
-    public var networkPolicy: NetworkPolicy
+    public var networkPolicy: ShellNetworkPolicy
     public var executionLimits: ExecutionLimits
-    public var permissionHandler: (@Sendable (PermissionRequest) async -> PermissionDecision)?
+    public var permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)?
     public var secretPolicy: SecretHandlingPolicy
     public var secretResolver: (any SecretReferenceResolving)?
     public var secretOutputRedactor: any SecretOutputRedacting
@@ -377,7 +377,7 @@ Defaults:
 - `initialEnvironment`: `[:]`
 - `enableGlobbing`: `true`
 - `maxHistory`: `1000`
-- `networkPolicy`: `NetworkPolicy.disabled`
+- `networkPolicy`: `ShellNetworkPolicy.disabled`
 - `executionLimits`: `ExecutionLimits.default`
 - `permissionHandler`: `nil`
 - `secretPolicy`: `.off`
@@ -390,7 +390,7 @@ Example built-in policy plus callback:
 
 ```swift
 let options = SessionOptions(
-    networkPolicy: NetworkPolicy(
+    networkPolicy: ShellNetworkPolicy(
         allowsHTTPRequests: true,
         allowedHosts: ["api.example.com"],
         allowedURLPrefixes: ["https://api.example.com/v1/"],
@@ -423,7 +423,7 @@ Available filesystem implementations:
 - `SandboxFilesystem`: resolves app container-style roots (`documents`, `caches`, `temporary`, app group, custom URL).
 - `SecurityScopedFilesystem`: URL/bookmark-backed filesystem for security-scoped access.
 
-For non-shell agent tooling, `Workspace` exposes the same filesystem stack under shell-agnostic names like `WorkspaceFilesystem`, `WorkspacePath`, `WorkspaceError`, and `PermissionedWorkspaceFilesystem`, along with the higher-level `Workspace` actor for typed tree traversal and batch editing helpers. A single `Workspace` can also sit on top of a `MountableFilesystem`, so isolated roots plus a shared `/memory` mount are already possible through the current interfaces.
+For non-shell agent tooling, `Workspace` exposes the same filesystem stack under shell-agnostic names like `FileSystem`, `WorkspacePath`, `WorkspaceError`, `PermissionRequest`, `PermissionDecision`, `PermissionAuthorizer`, and `PermissionedFileSystem`, along with the higher-level `Workspace` actor for typed tree traversal and batch editing helpers. A single `Workspace` can also sit on top of a `MountableFilesystem`, so isolated roots plus a shared `/memory` mount are already possible through the current interfaces.
 
 ### `SessionLayout`
 
@@ -447,8 +447,8 @@ Execution pipeline:
 
 Current hardening layers include:
 - Root-jail filesystem implementations plus null-byte path rejection.
-- Reusable workspace-level permission wrappers (`PermissionedWorkspaceFilesystem`) that can gate reads, writes, moves, copies, symlinks, and metadata operations before they hit the underlying filesystem.
-- Optional `NetworkPolicy` rules with default-off HTTP(S), `denyPrivateRanges`, host allowlists, URL-prefix allowlists, and the host `permissionHandler`.
+- Reusable workspace-level permission wrappers that can gate reads, writes, moves, copies, symlinks, and metadata operations before they hit the underlying filesystem.
+- Optional `ShellNetworkPolicy` rules with default-off HTTP(S), `denyPrivateRanges`, host allowlists, URL-prefix allowlists, and the host `permissionHandler`.
 - Built-in execution budgets for command count, loop iterations, function depth, and command substitution depth, plus host-driven cancellation.
 - Strict `BashPython` shims that block process/FFI escape APIs like `subprocess`, `ctypes`, and `os.system`.
 - Secret-reference resolution/redaction policies that keep opaque references in model-visible flows by default.
@@ -494,7 +494,7 @@ Behavior guarantees:
 - For `ReadWriteFilesystem`, symlink escapes outside root are blocked.
 - Filesystem implementations reject paths containing null bytes.
 - Built-in command stubs are created under `/bin` and `/usr/bin` inside the selected filesystem.
-- Unsupported platform features are surfaced as runtime `ShellError.unsupported(...)`, while all current package targets still compile.
+- Unsupported platform features are surfaced as runtime unsupported errors from either `Bash` or `Workspace`, while all current package targets still compile.
 
 Rootless session init example:
 
@@ -505,9 +505,9 @@ let session = try await BashSession(options: inMemory)
 
 `BashSession.init(options:)` uses the filesystem exactly as provided. Pass a ready-to-use filesystem instance. `InMemoryFilesystem` works immediately; root-backed filesystems should be constructed or configured with their root before being passed in.
 
-You can provide a custom filesystem by implementing `ShellFilesystem`.
+You can provide a custom filesystem by implementing `FileSystem`.
 
-If you do not need shell semantics, use `WorkspaceFilesystem` and the higher-level `Workspace` actor directly. The underlying jail, overlay, mount, bookmark, and permission concepts are shared; the shell layer is optional.
+If you do not need shell semantics, use the `Workspace` package's filesystem APIs and the higher-level `Workspace` actor directly. The underlying jail, overlay, mount, bookmark, and permission concepts are shared; the shell layer is optional.
 
 ### Filesystem Platform Matrix
 
@@ -518,7 +518,7 @@ If you do not need shell semantics, use `WorkspaceFilesystem` and the higher-lev
 | `OverlayFilesystem` | supported | supported | supported | supported |
 | `MountableFilesystem` | supported | supported | supported | supported |
 | `SandboxFilesystem` | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) | supported (where root resolves) |
-| `SecurityScopedFilesystem` | supported | supported | supported | compiles; throws `ShellError.unsupported` when configured |
+| `SecurityScopedFilesystem` | supported | supported | supported | compiles; throws `WorkspaceError.unsupported(...)` when constructed on unsupported platforms |
 
 ### Security-Scoped Bookmark Flow
 
