@@ -20,20 +20,65 @@ public struct SecretFetchResult: Sendable {
     }
 }
 
-public protocol SecretsRuntime: Sendable {
+public protocol SecretsProvider: Sendable {
     func putGenericPassword(
         locator: SecretLocator,
         value: Data,
         label: String?,
         update: Bool
-    ) async throws
+    ) async throws -> String
+
+    func reference(for locator: SecretLocator) async throws -> String
 
     func getGenericPassword(
-        locator: SecretLocator,
+        reference: String,
         revealValue: Bool
     ) async throws -> SecretFetchResult
 
-    func deleteGenericPassword(locator: SecretLocator) async throws -> Bool
+    func deleteReference(_ reference: String) async throws -> Bool
+}
+
+public extension SecretsProvider {
+    func putGenericPassword(
+        service: String,
+        account: String,
+        keychain: String? = nil,
+        value: Data,
+        label: String? = nil,
+        update: Bool = true
+    ) async throws -> String {
+        try await putGenericPassword(
+            locator: SecretLocator(service: service, account: account, keychain: keychain),
+            value: value,
+            label: label,
+            update: update
+        )
+    }
+
+    func reference(
+        service: String,
+        account: String,
+        keychain: String? = nil
+    ) async throws -> String {
+        try await reference(
+            for: SecretLocator(service: service, account: account, keychain: keychain)
+        )
+    }
+
+    func metadata(forReference reference: String) async throws -> SecretMetadata {
+        try await getGenericPassword(reference: reference, revealValue: false).metadata
+    }
+
+    func resolveReference(_ reference: String) async throws -> Data {
+        let fetched = try await getGenericPassword(reference: reference, revealValue: true)
+        guard let value = fetched.value else {
+            let locator = fetched.metadata.locator
+            throw SecretsError.runtimeFailure(
+                "secret value missing for service '\(locator.service)' and account '\(locator.account)'"
+            )
+        }
+        return value
+    }
 }
 
 public enum SecretsError: Error, CustomStringConvertible, Sendable {
@@ -62,122 +107,7 @@ public enum SecretsError: Error, CustomStringConvertible, Sendable {
     }
 }
 
-public actor SecretsRuntimeRegistry {
-    public static let shared = SecretsRuntimeRegistry()
-
-    private var runtime: any SecretsRuntime
-
-    public init(runtime: (any SecretsRuntime)? = nil) {
-        if let runtime {
-            self.runtime = runtime
-            return
-        }
-
-        #if canImport(Security)
-        self.runtime = AppleKeychainSecretsRuntime()
-        #else
-        self.runtime = UnsupportedSecretsRuntime(
-            message: "keychain secrets are not supported on this platform"
-        )
-        #endif
-    }
-
-    public func setRuntime(_ runtime: any SecretsRuntime) {
-        self.runtime = runtime
-    }
-
-    public func currentRuntime() -> any SecretsRuntime {
-        runtime
-    }
-
-    public func resetToDefault() {
-        #if canImport(Security)
-        runtime = AppleKeychainSecretsRuntime()
-        #else
-        runtime = UnsupportedSecretsRuntime(
-            message: "keychain secrets are not supported on this platform"
-        )
-        #endif
-    }
-}
-
-public enum Secrets {
-    public static func setRuntime(_ runtime: any SecretsRuntime) async {
-        await SecretsRuntimeRegistry.shared.setRuntime(runtime)
-    }
-
-    public static func resetRuntime() async {
-        await SecretsRuntimeRegistry.shared.resetToDefault()
-    }
-
-    public static func makeReference(
-        service: String,
-        account: String,
-        keychain: String? = nil
-    ) -> String {
-        SecretReference(
-            locator: SecretLocator(service: service, account: account, keychain: keychain)
-        ).stringValue
-    }
-
-    public static func parseReference(_ value: String) -> SecretLocator? {
-        SecretReference(string: value)?.locator
-    }
-
-    public static func putGenericPassword(
-        service: String,
-        account: String,
-        keychain: String? = nil,
-        value: Data,
-        label: String? = nil,
-        update: Bool = true
-    ) async throws -> String {
-        let locator = SecretLocator(service: service, account: account, keychain: keychain)
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-        try await runtime.putGenericPassword(
-            locator: locator,
-            value: value,
-            label: label,
-            update: update
-        )
-        return SecretReference(locator: locator).stringValue
-    }
-
-    public static func metadata(forReference reference: String) async throws -> SecretMetadata {
-        guard let locator = parseReference(reference) else {
-            throw SecretsError.invalidReference(reference)
-        }
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-        return try await runtime.getGenericPassword(
-            locator: locator,
-            revealValue: false
-        ).metadata
-    }
-
-    public static func resolveReference(_ reference: String) async throws -> Data {
-        guard let locator = parseReference(reference) else {
-            throw SecretsError.invalidReference(reference)
-        }
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-        let fetched = try await runtime.getGenericPassword(locator: locator, revealValue: true)
-        guard let value = fetched.value else {
-            throw SecretsError.runtimeFailure(
-                "secret value missing for service '\(locator.service)' and account '\(locator.account)'"
-            )
-        }
-        return value
-    }
-
-    public static func deleteReference(_ reference: String) async throws -> Bool {
-        guard let locator = parseReference(reference) else {
-            throw SecretsError.invalidReference(reference)
-        }
-        let runtime = await SecretsRuntimeRegistry.shared.currentRuntime()
-        return try await runtime.deleteGenericPassword(locator: locator)
-    }
-}
-
-struct UnsupportedSecretsRuntime: SecretsRuntime {
+struct UnsupportedSecretsProvider: SecretsProvider {
     let message: String
 
     func putGenericPassword(
@@ -185,7 +115,7 @@ struct UnsupportedSecretsRuntime: SecretsRuntime {
         value: Data,
         label: String?,
         update: Bool
-    ) async throws {
+    ) async throws -> String {
         _ = locator
         _ = value
         _ = label
@@ -193,17 +123,22 @@ struct UnsupportedSecretsRuntime: SecretsRuntime {
         throw SecretsError.unsupported(message)
     }
 
+    func reference(for locator: SecretLocator) async throws -> String {
+        _ = locator
+        throw SecretsError.unsupported(message)
+    }
+
     func getGenericPassword(
-        locator: SecretLocator,
+        reference: String,
         revealValue: Bool
     ) async throws -> SecretFetchResult {
-        _ = locator
+        _ = reference
         _ = revealValue
         throw SecretsError.unsupported(message)
     }
 
-    func deleteGenericPassword(locator: SecretLocator) async throws -> Bool {
-        _ = locator
+    func deleteReference(_ reference: String) async throws -> Bool {
+        _ = reference
         throw SecretsError.unsupported(message)
     }
 }

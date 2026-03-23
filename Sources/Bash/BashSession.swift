@@ -7,6 +7,9 @@ public final actor BashSession {
     let jobManager: ShellJobManager
     private let permissionAuthorizer: ShellPermissionAuthorizer
     var executionControlStore: ExecutionControl?
+    private var secretPolicyStore: SecretHandlingPolicy
+    private var secretResolverStore: (any SecretReferenceResolving)?
+    private var secretOutputRedactorStore: any SecretOutputRedacting
 
     var currentDirectoryStore: String
     var environmentStore: [String: String]
@@ -283,7 +286,7 @@ public final actor BashSession {
         await register(erased)
     }
 
-    func register(_ command: AnyBuiltinCommand) async {
+    public func register(_ command: AnyBuiltinCommand) async {
         commandRegistry[command.name] = command
 
         for alias in command.aliases {
@@ -296,6 +299,28 @@ public final actor BashSession {
                 await createCommandStub(named: alias)
             }
         }
+    }
+
+    public func configureSecrets(
+        policy: SecretHandlingPolicy,
+        resolver: (any SecretReferenceResolving)?,
+        redactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()
+    ) {
+        secretPolicyStore = policy
+        secretResolverStore = resolver
+        secretOutputRedactorStore = redactor
+    }
+
+    public func setSecretHandlingPolicy(_ policy: SecretHandlingPolicy) {
+        secretPolicyStore = policy
+    }
+
+    public func setSecretResolver(_ resolver: (any SecretReferenceResolving)?) {
+        secretResolverStore = resolver
+    }
+
+    public func setSecretOutputRedactor(_ redactor: any SecretOutputRedacting) {
+        secretOutputRedactorStore = redactor
     }
 
     private func setupLayout() async throws {
@@ -339,6 +364,9 @@ public final actor BashSession {
             handler: options.permissionHandler
         )
         executionControlStore = nil
+        secretPolicyStore = options.secretPolicy
+        secretResolverStore = options.secretResolver
+        secretOutputRedactorStore = options.secretOutputRedactor
 
         commandRegistry = [:]
         shellFunctionStore = [:]
@@ -396,9 +424,9 @@ public final actor BashSession {
         shellFunctions: [String: String],
         jobControl: (any ShellJobControlling)?
     ) async -> ShellExecutionResult {
-        let secretPolicy = options.secretPolicy
-        let secretResolver = options.secretResolver
-        let secretOutputRedactor = options.secretOutputRedactor
+        let secretPolicy = secretPolicyStore
+        let secretResolver = secretResolverStore
+        let secretOutputRedactor = secretOutputRedactorStore
         let secretTracker = secretPolicy == .off ? nil : SecretExposureTracker()
 
         var execution = await ShellExecutor.execute(

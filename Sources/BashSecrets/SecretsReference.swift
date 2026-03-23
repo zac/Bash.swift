@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 public struct SecretLocator: Sendable, Hashable, Codable {
@@ -12,48 +13,66 @@ public struct SecretLocator: Sendable, Hashable, Codable {
     }
 }
 
-public struct SecretReference: Sendable, Hashable, Codable {
-    public static let prefix = "secretref:v1:"
+enum SecretReference {
+    static let prefix = "secretref:"
 
-    public var locator: SecretLocator
-
-    public init(locator: SecretLocator) {
-        self.locator = locator
-    }
-
-    public var stringValue: String {
-        let payload = Payload(kind: "generic-password", locator: locator)
+    static func makeGenericPasswordReference(
+        locator: SecretLocator,
+        using key: SymmetricKey
+    ) throws -> String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
-        guard
-            let encoded = try? encoder.encode(payload)
-        else {
-            return Self.prefix
+        let payload = try encoder.encode(Payload(kind: "generic-password", locator: locator))
+        let sealed = try AES.GCM.seal(payload, using: key)
+        guard let combined = sealed.combined else {
+            throw SecretsError.runtimeFailure("failed to create secret reference")
         }
-
-        return Self.prefix + encoded.base64URLEncodedString()
+        return prefix + combined.base64URLEncodedString()
     }
 
-    public init?(string: String) {
-        guard string.hasPrefix(Self.prefix) else {
-            return nil
+    static func parseGenericPasswordReference(
+        _ value: String,
+        using key: SymmetricKey
+    ) throws -> SecretLocator {
+        guard value.hasPrefix(prefix) else {
+            throw SecretsError.invalidReference(value)
         }
 
-        let rawPayload = String(string.dropFirst(Self.prefix.count))
-        guard
-            let payloadData = Data(base64URLEncoded: rawPayload),
-            let payload = try? JSONDecoder().decode(Payload.self, from: payloadData),
-            payload.kind == "generic-password"
-        else {
-            return nil
+        let rawPayload = String(value.dropFirst(prefix.count))
+        guard let sealedData = Data(base64URLEncoded: rawPayload) else {
+            throw SecretsError.invalidReference(value)
         }
 
-        locator = payload.locator
+        let payloadData: Data
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: sealedData)
+            payloadData = try AES.GCM.open(sealedBox, using: key)
+        } catch {
+            throw SecretsError.invalidReference(value)
+        }
+
+        do {
+            let payload = try JSONDecoder().decode(Payload.self, from: payloadData)
+            guard payload.kind == "generic-password" else {
+                throw SecretsError.invalidReference(value)
+            }
+            return payload.locator
+        } catch let error as SecretsError {
+            throw error
+        } catch {
+            throw SecretsError.invalidReference(value)
+        }
     }
 
     private struct Payload: Codable {
         let kind: String
         let locator: SecretLocator
+    }
+}
+
+extension SymmetricKey {
+    var rawData: Data {
+        withUnsafeBytes { Data($0) }
     }
 }
 

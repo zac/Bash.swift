@@ -477,7 +477,10 @@ struct CurlCommand: BuiltinCommand {
 
             let resolvedToken: String
             do {
-                resolvedToken = try await resolveSecretReferences(in: token, context: &context)
+                resolvedToken = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: token,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -492,7 +495,10 @@ struct CurlCommand: BuiltinCommand {
             } else {
                 let resolvedToken: String
                 do {
-                    resolvedToken = try await resolveSecretReferences(in: token, context: &context)
+                    resolvedToken = try await SecretAwareSinkSupport.resolveSecretReferences(
+                        in: token,
+                        context: &context
+                    )
                 } catch {
                     context.writeStderr("curl: \(error)\n")
                     return .failure(1)
@@ -522,7 +528,10 @@ struct CurlCommand: BuiltinCommand {
 
             let resolvedToken: String
             do {
-                resolvedToken = try await resolveSecretReferences(in: token, context: &context)
+                resolvedToken = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: token,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -534,7 +543,10 @@ struct CurlCommand: BuiltinCommand {
         for token in encodedTokens {
             let resolvedToken: String
             do {
-                resolvedToken = try await resolveSecretReferences(in: token, context: &context)
+                resolvedToken = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: token,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -835,7 +847,10 @@ struct CurlCommand: BuiltinCommand {
 
             let value: String
             do {
-                value = try await resolveSecretReferences(in: rawValue, context: &context)
+                value = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: rawValue,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -845,7 +860,10 @@ struct CurlCommand: BuiltinCommand {
 
         if let userAgent = options.userAgent {
             do {
-                parsed["User-Agent"] = try await resolveSecretReferences(in: userAgent, context: &context)
+                parsed["User-Agent"] = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: userAgent,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -853,7 +871,10 @@ struct CurlCommand: BuiltinCommand {
         }
         if let referer = options.referer {
             do {
-                parsed["Referer"] = try await resolveSecretReferences(in: referer, context: &context)
+                parsed["Referer"] = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: referer,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -862,7 +883,10 @@ struct CurlCommand: BuiltinCommand {
         if let user = options.user {
             let resolvedUser: String
             do {
-                resolvedUser = try await resolveSecretReferences(in: user, context: &context)
+                resolvedUser = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: user,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)
@@ -877,59 +901,6 @@ struct CurlCommand: BuiltinCommand {
         }
 
         return .success(parsed)
-    }
-
-    private static let secretReferencePrefix = "secretref:v1:"
-
-    private static func resolveSecretReferences(
-        in value: String,
-        context: inout CommandContext
-    ) async throws -> String {
-        guard value.contains(secretReferencePrefix) else {
-            return value
-        }
-
-        var output = ""
-        var index = value.startIndex
-
-        while index < value.endIndex {
-            guard let prefixRange = value[index...].range(of: secretReferencePrefix) else {
-                output += String(value[index...])
-                break
-            }
-
-            output += String(value[index..<prefixRange.lowerBound])
-            var end = prefixRange.upperBound
-            while end < value.endIndex, isSecretReferenceCharacter(value[end]) {
-                end = value.index(after: end)
-            }
-
-            let candidate = String(value[prefixRange.lowerBound..<end])
-            if candidate == secretReferencePrefix {
-                output += candidate
-                index = end
-                continue
-            }
-
-            if let resolved = try await context.resolveSecretReferenceIfEnabled(candidate) {
-                guard let resolvedString = String(data: resolved, encoding: .utf8) else {
-                    throw ShellError.unsupported(
-                        "secret reference resolved to non-UTF-8 data and cannot be used in curl arguments"
-                    )
-                }
-                output += resolvedString
-            } else {
-                output += candidate
-            }
-
-            index = end
-        }
-
-        return output
-    }
-
-    private static func isSecretReferenceCharacter(_ character: Character) -> Bool {
-        character == "-" || character == "_" || character.isLetter || character.isNumber
     }
 
     private static func headerValue(named target: String, in headers: [String: String]) -> String? {
@@ -1020,7 +991,10 @@ struct CurlCommand: BuiltinCommand {
 
             let resolvedValue: String
             do {
-                resolvedValue = try await resolveSecretReferences(in: rawValue, context: &context)
+                resolvedValue = try await SecretAwareSinkSupport.resolveSecretReferences(
+                    in: rawValue,
+                    context: &context
+                )
             } catch {
                 context.writeStderr("curl: \(error)\n")
                 return .failure(1)

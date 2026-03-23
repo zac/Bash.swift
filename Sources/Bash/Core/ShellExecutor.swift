@@ -405,14 +405,9 @@ enum ShellExecutor {
                         normalizing: target,
                         relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
-                    let redactedOutput = await redactForExternalOutput(
-                        result.stdout,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
-                    )
                     try await commandFilesystem.writeFile(
                         path: path,
-                        data: redactedOutput,
+                        data: result.stdout,
                         append: redirection.type == .stdoutAppend
                     )
                     result.stdout.removeAll(keepingCapacity: true)
@@ -435,14 +430,9 @@ enum ShellExecutor {
                         normalizing: target,
                         relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
-                    let redactedStderr = await redactForExternalOutput(
-                        result.stderr,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
-                    )
                     try await commandFilesystem.writeFile(
                         path: path,
-                        data: redactedStderr,
+                        data: result.stderr,
                         append: redirection.type == .stderrAppend
                     )
                     result.stderr.removeAll(keepingCapacity: true)
@@ -468,19 +458,9 @@ enum ShellExecutor {
                         normalizing: target,
                         relativeTo: WorkspacePath(normalizing: currentDirectory)
                     )
-                    let redactedStdout = await redactForExternalOutput(
-                        result.stdout,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
-                    )
-                    let redactedStderr = await redactForExternalOutput(
-                        result.stderr,
-                        secretTracker: secretTracker,
-                        secretOutputRedactor: secretOutputRedactor
-                    )
                     var combined = Data()
-                    combined.append(redactedStdout)
-                    combined.append(redactedStderr)
+                    combined.append(result.stdout)
+                    combined.append(result.stderr)
                     try await commandFilesystem.writeFile(
                         path: path,
                         data: combined,
@@ -1808,23 +1788,4 @@ enum ShellExecutor {
         return nil
     }
 
-    private static func redactForExternalOutput(
-        _ data: Data,
-        secretTracker: SecretExposureTracker?,
-        secretOutputRedactor: any SecretOutputRedacting
-    ) async -> Data {
-        guard let secretTracker else {
-            return data
-        }
-
-        let replacements = await secretTracker.snapshot()
-        guard !replacements.isEmpty else {
-            return data
-        }
-
-        return secretOutputRedactor.redact(
-            data: data,
-            replacements: replacements
-        )
-    }
 }

@@ -154,42 +154,46 @@ Optional `secrets` registration:
 ```swift
 import BashSecrets
 
-await session.registerSecrets()
+let provider = AppleKeychainSecretsProvider()
+await session.registerSecrets(provider: provider)
 let ref = await session.run("secrets put --service app --account api", stdin: Data("token".utf8))
 let use = await session.run("secrets run --env API_TOKEN=\(ref.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)) -- printenv API_TOKEN")
 print(use.stdoutString)
 ```
 
-`BashSecrets` defaults to Apple Keychain generic-password storage through Security.framework and emits opaque `secretref:v1:...` references.
+`BashSecrets` uses provider-owned opaque `secretref:...` references. `AppleKeychainSecretsProvider` stores secrets in Apple Keychain generic-password entries and keeps the reference-sealing key in a reserved internal Keychain item so refs remain durable for that provider/backend.
 
-For harness/tooling flows where the model should only handle references, use the `Secrets` API directly:
+For harness/tooling flows where the model should only handle references, use the provider API directly:
 
 ```swift
-let ref = try await Secrets.putGenericPassword(
+let provider = AppleKeychainSecretsProvider()
+let ref = try await provider.putGenericPassword(
     service: "app",
     account: "api",
     value: Data("token".utf8)
 )
 
 // Resolve inside trusted tool code, not in model-visible shell output.
-let secretValue = try await Secrets.resolveReference(ref)
+let secretValue = try await provider.resolveReference(ref)
 ```
 
-For secret-aware command execution/redaction inside `BashSession`, configure a resolver and policy:
+For secret-aware command execution/redaction inside `BashSession`, wire the same provider into the session:
 
 ```swift
-let options = SessionOptions(
-    filesystem: ReadWriteFilesystem(),
-    layout: .unixLike,
-    secretPolicy: .strict,
-    secretResolver: BashSecretsReferenceResolver()
+let session = try await BashSession(
+    rootDirectory: root,
+    options: SessionOptions(
+        filesystem: ReadWriteFilesystem(),
+        layout: .unixLike
+    )
 )
-let session = try await BashSession(rootDirectory: root, options: options)
+let provider = AppleKeychainSecretsProvider()
+await session.registerSecrets(provider: provider, policy: .strict)
 ```
 
 Policies:
 - `.off`: no automatic secret-reference resolution/redaction in builtins
-- `.resolveAndRedact`: resolve refs (where supported) and redact/replace secrets in output
+- `.resolveAndRedact`: resolve refs only in explicit sinks and redact caller-visible `stdout`/`stderr`
 - `.strict`: like `.resolveAndRedact`, plus blocks high-risk flows like `secrets get --reveal`
 
 ## Workspace Modules
@@ -589,7 +593,7 @@ All implemented commands support `--help`.
 | --- | --- |
 | `sqlite3` | **Opt-in via `BashSQLite`**: modes `-list`, `-csv`, `-json`, `-line`, `-column`, `-table`, `-markdown`; `-header`, `-noheader`, `-separator <sep>`, `-newline <nl>`, `-nullvalue <str>`, `-readonly`, `-bail`, `-cmd <sql>`, `-version`, `--`; syntax `sqlite3 [options] [database] [sql]` |
 | `python3` / `python` | **Opt-in via `BashPython`**: embedded CPython runtime (`python3 [OPTIONS] [-c CODE | -m MODULE | FILE] [ARGS...]`); supports `-c`, `-m`, `-V/--version`, stdin execution, and script/module execution against strict shell-filesystem shims (process/FFI escape APIs blocked) |
-| `secrets` / `secret` | **Opt-in via `BashSecrets`**: `put`, `ref`, `get`, `delete`, `run`; Keychain generic-password backend with reference-first flows (`secretref:v1:...`) and explicit `get --reveal` for plaintext output |
+| `secrets` / `secret` | **Opt-in via `BashSecrets`**: `put`, `get`, `delete`, `run`; provider-backed reference-first flows (`secretref:...`) and explicit `get --reveal` for plaintext output |
 | `jq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files. Query subset supports paths, `|`, `select(...)`, comparisons, `and`/`or`/`not`, `//` |
 | `yq` | `-r`, `-c`, `-e`, `-s`, `-n`, `-j`, `-S`; query + optional files (YAML + JSON input), same query subset as `jq` |
 | `xan` | subcommands: `count`, `headers`, `select`, `filter` |
@@ -652,7 +656,7 @@ All implemented commands support `--help`.
 | `wget` | URL argument; `--version`, `-q/--quiet`, `-O/--output-document <file>`, `--user-agent <ua>` |
 | `html-to-markdown` | `-b/--bullet <marker>`, `-c/--code <fence>`, `-r/--hr <rule>`, `--heading-style <atx|setext>`; input from file or stdin; strips `script/style/footer` blocks; supports nested lists and Markdown table rendering |
 
-When `SessionOptions.secretPolicy` is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:v1:...` tokens in headers/body arguments and output redaction replaces resolved values with their reference tokens.
+When the active secret policy is `.resolveAndRedact` or `.strict`, `curl` resolves `secretref:...` tokens in headers/body arguments and caller-visible output redaction replaces resolved values with their reference tokens. Normal shell file redirections keep plaintext bytes.
 When `SessionOptions.networkPolicy` is set, `curl`/`wget`, `git clone` remotes, and `BashPython` socket connections enforce the same built-in default-off HTTP(S), allowlist, and private-range rules.
 When `SessionOptions.permissionHandler` is set, shell filesystem operations and redirections ask it before reading or mutating files, `curl` and `wget` ask it before outbound HTTP(S) requests, `git clone` asks it before remote clones, and `BashPython` asks it before socket connections. Permission callback wait time is excluded from both `timeout` and run-level wall-clock budgets. `data:` and jailed `file:` URLs do not trigger network checks.
 
