@@ -1,5 +1,6 @@
 import ArgumentParser
 import Bash
+import BashPython
 import Foundation
 import Yams
 
@@ -234,6 +235,8 @@ final class BashSwiftEngine: CandidateEngine {
                 initialEnvironment: [Self.pwdHostRootEnvKey: effectiveHostRoot]
             )
         )
+        await BashPython.setCPythonRuntime()
+        await session.registerPython()
         self.maxOutputBytes = maxOutputBytes
     }
 
