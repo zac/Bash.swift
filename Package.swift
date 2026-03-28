@@ -111,6 +111,7 @@ let package = Package(
             name: "BashEvalRunner",
             dependencies: [
                 "Bash",
+                "BashGit",
                 "BashPython",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Yams", package: "Yams"),

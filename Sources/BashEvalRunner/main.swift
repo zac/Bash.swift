@@ -1,5 +1,6 @@
 import ArgumentParser
 import Bash
+import BashGit
 import BashPython
 import Foundation
 import Yams
@@ -236,6 +237,7 @@ final class BashSwiftEngine: CandidateEngine {
             )
         )
         await BashPython.setCPythonRuntime()
+        await session.registerGit()
         await session.registerPython()
         self.maxOutputBytes = maxOutputBytes
     }

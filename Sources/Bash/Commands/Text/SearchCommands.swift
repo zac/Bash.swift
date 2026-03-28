@@ -380,6 +380,7 @@ struct RgCommand: BuiltinCommand {
 
         let patterns: [String]
         let roots: [String]
+        let hasExplicitRoots: Bool
         if options.files {
             if !options.e.isEmpty || !options.f.isEmpty {
                 context.writeStderr("rg: cannot combine --files with -e or -f\n")
@@ -387,6 +388,7 @@ struct RgCommand: BuiltinCommand {
             }
             patterns = []
             roots = options.values.isEmpty ? ["."] : options.values
+            hasExplicitRoots = !options.values.isEmpty
         } else {
             var resolvedPatterns = options.e
             let patternFileRead = await readPatternsFromFiles(paths: options.f, commandName: "rg", context: &context)
@@ -402,8 +404,10 @@ struct RgCommand: BuiltinCommand {
                 }
                 resolvedPatterns.append(rawPattern)
                 roots = options.values.count > 1 ? Array(options.values.dropFirst()) : ["."]
+                hasExplicitRoots = options.values.count > 1
             } else {
                 roots = options.values.isEmpty ? ["."] : options.values
+                hasExplicitRoots = !options.values.isEmpty
             }
 
             guard !resolvedPatterns.isEmpty else {
@@ -415,24 +419,80 @@ struct RgCommand: BuiltinCommand {
 
         let includeExtensions = resolvedTypeExtensions(options.t)
         let excludeExtensions = resolvedTypeExtensions(options.T)
+        let readFromStandardInput = !options.files && !hasExplicitRoots && !context.stdin.isEmpty
 
-        let candidate = await collectCandidateFiles(
-            roots: roots,
-            includeHidden: options.hidden || options.noIgnore,
-            globs: options.globs,
-            includeExtensions: includeExtensions,
-            excludeExtensions: excludeExtensions,
-            context: &context
-        )
-        if candidate.hadError {
-            return 2
-        }
-
-        if options.files {
-            for file in candidate.files {
-                context.writeStdout("\(file.displayPath)\n")
+        if !readFromStandardInput {
+            let candidate = await collectCandidateFiles(
+                roots: roots,
+                includeHidden: options.hidden || options.noIgnore,
+                globs: options.globs,
+                includeExtensions: includeExtensions,
+                excludeExtensions: excludeExtensions,
+                relativeDisplayPaths: options.files,
+                context: &context
+            )
+            if candidate.hadError {
+                return 2
             }
-            return 0
+
+            if options.files {
+                for file in candidate.files {
+                    context.writeStdout("\(file.displayPath)\n")
+                }
+                return 0
+            }
+
+            guard !patterns.isEmpty else {
+                return 2
+            }
+
+            let ignoreCase = options.i || (options.S && !containsUppercase(in: patterns))
+            let matcher: SearchMatcher
+            do {
+                matcher = try SearchMatcher.make(
+                    commandName: "rg",
+                    patterns: patterns,
+                    fixedStrings: options.F,
+                    ignoreCase: ignoreCase,
+                    wordMatch: options.w,
+                    fullLineMatch: options.x
+                )
+            } catch let error as SearchMatcherBuildError {
+                context.writeStderr("\(error.message)\n")
+                return 2
+            } catch {
+                context.writeStderr("rg: failed to build matcher\n")
+                return 2
+            }
+
+            var foundMatch = false
+            var hadError = false
+
+            for candidateFile in candidate.files {
+                do {
+                    let matched = try await searchFile(
+                        path: candidateFile.path,
+                        displayPath: candidateFile.displayPath,
+                        matcher: matcher,
+                        includeLineNumbers: options.n,
+                        fileNamesOnly: options.l,
+                        countOnly: options.c,
+                        beforeContext: beforeContext,
+                        afterContext: afterContext,
+                        maxMatchesPerFile: options.m,
+                        context: &context
+                    )
+                    foundMatch = foundMatch || matched
+                } catch {
+                    context.writeStderr("rg: \(candidateFile.displayPath): \(error)\n")
+                    hadError = true
+                }
+            }
+
+            if hadError {
+                return 2
+            }
+            return foundMatch ? 0 : 1
         }
 
         guard !patterns.isEmpty else {
@@ -457,35 +517,19 @@ struct RgCommand: BuiltinCommand {
             context.writeStderr("rg: failed to build matcher\n")
             return 2
         }
-
-        var foundMatch = false
-        var hadError = false
-
-        for candidateFile in candidate.files {
-            do {
-                let matched = try await searchFile(
-                    path: candidateFile.path,
-                    displayPath: candidateFile.displayPath,
-                    matcher: matcher,
-                    includeLineNumbers: options.n,
-                    fileNamesOnly: options.l,
-                    countOnly: options.c,
-                    beforeContext: beforeContext,
-                    afterContext: afterContext,
-                    maxMatchesPerFile: options.m,
-                    context: &context
-                )
-                foundMatch = foundMatch || matched
-            } catch {
-                context.writeStderr("rg: \(candidateFile.displayPath): \(error)\n")
-                hadError = true
-            }
-        }
-
-        if hadError {
-            return 2
-        }
-        return foundMatch ? 0 : 1
+        let matched = searchContent(
+            content: CommandIO.decodeString(context.stdin),
+            displayPath: "",
+            matcher: matcher,
+            includeLineNumbers: options.n,
+            fileNamesOnly: options.l,
+            countOnly: options.c,
+            beforeContext: beforeContext,
+            afterContext: afterContext,
+            maxMatchesPerFile: options.m,
+            context: &context
+        )
+        return matched ? 0 : 1
     }
 
     private struct CandidateFile {
@@ -507,6 +551,32 @@ struct RgCommand: BuiltinCommand {
     ) async throws -> Bool {
         let data = try await context.filesystem.readFile(path: path)
         let content = CommandIO.decodeString(data)
+        return searchContent(
+            content: content,
+            displayPath: displayPath,
+            matcher: matcher,
+            includeLineNumbers: includeLineNumbers,
+            fileNamesOnly: fileNamesOnly,
+            countOnly: countOnly,
+            beforeContext: beforeContext,
+            afterContext: afterContext,
+            maxMatchesPerFile: maxMatchesPerFile,
+            context: &context
+        )
+    }
+
+    private static func searchContent(
+        content: String,
+        displayPath: String,
+        matcher: SearchMatcher,
+        includeLineNumbers: Bool,
+        fileNamesOnly: Bool,
+        countOnly: Bool,
+        beforeContext: Int,
+        afterContext: Int,
+        maxMatchesPerFile: Int?,
+        context: inout CommandContext
+    ) -> Bool {
         let lines = CommandIO.splitLines(content)
 
         var matchedIndices: [Int] = []
@@ -522,12 +592,16 @@ struct RgCommand: BuiltinCommand {
         }
 
         if fileNamesOnly {
-            context.writeStdout("\(displayPath)\n")
+            context.writeStdout(displayPath.isEmpty ? "(standard input)\n" : "\(displayPath)\n")
             return true
         }
 
         if countOnly {
-            context.writeStdout("\(displayPath):\(matchedIndices.count)\n")
+            if displayPath.isEmpty {
+                context.writeStdout("\(matchedIndices.count)\n")
+            } else {
+                context.writeStdout("\(displayPath):\(matchedIndices.count)\n")
+            }
             return true
         }
 
@@ -542,11 +616,20 @@ struct RgCommand: BuiltinCommand {
         for index in outputIndices {
             let line = lines[index]
             if includeLineNumbers {
-                context.writeStdout("\(displayPath):\(index + 1):\(line)\n")
+                let prefix = displayPath.isEmpty ? "\(index + 1):" : "\(displayPath):\(index + 1):"
+                context.writeStdout("\(prefix)\(line)\n")
             } else if matchSet.contains(index) {
-                context.writeStdout("\(displayPath):\(line)\n")
+                if displayPath.isEmpty {
+                    context.writeStdout("\(line)\n")
+                } else {
+                    context.writeStdout("\(displayPath):\(line)\n")
+                }
             } else {
-                context.writeStdout("\(displayPath)-\(line)\n")
+                if displayPath.isEmpty {
+                    context.writeStdout("\(line)\n")
+                } else {
+                    context.writeStdout("\(displayPath)-\(line)\n")
+                }
             }
         }
 
@@ -571,11 +654,13 @@ struct RgCommand: BuiltinCommand {
         globs: [String],
         includeExtensions: Set<String>,
         excludeExtensions: Set<String>,
+        relativeDisplayPaths: Bool,
         context: inout CommandContext
     ) async -> (files: [CandidateFile], hadError: Bool) {
         var result: [CandidateFile] = []
         var seen = Set<String>()
         var hadError = false
+        let currentDirectory = context.currentDirectoryPath
 
         let globRegexes: [NSRegularExpression] = globs.compactMap { glob in
             try? NSRegularExpression(pattern: WorkspacePath.globToRegex(glob))
@@ -606,7 +691,15 @@ struct RgCommand: BuiltinCommand {
                             continue
                         }
                         if seen.insert(entry.string).inserted {
-                            result.append(CandidateFile(path: entry, displayPath: entry.string))
+                            let displayPath = relativeDisplayPaths
+                                ? candidateDisplayPath(
+                                    path: entry,
+                                    resolvedRoot: resolved,
+                                    rootArgument: root,
+                                    currentDirectory: currentDirectory
+                                )
+                                : entry.string
+                            result.append(CandidateFile(path: entry, displayPath: displayPath))
                         }
                     }
                 } else {
@@ -624,7 +717,15 @@ struct RgCommand: BuiltinCommand {
                         continue
                     }
                     if seen.insert(resolved.string).inserted {
-                        result.append(CandidateFile(path: resolved, displayPath: root))
+                        let displayPath = relativeDisplayPaths
+                            ? candidateDisplayPath(
+                                path: resolved,
+                                resolvedRoot: resolved,
+                                rootArgument: root,
+                                currentDirectory: currentDirectory
+                            )
+                            : root
+                        result.append(CandidateFile(path: resolved, displayPath: displayPath))
                     }
                 }
             } catch {
@@ -634,6 +735,40 @@ struct RgCommand: BuiltinCommand {
         }
 
         return (result.sorted { $0.displayPath < $1.displayPath }, hadError)
+    }
+
+    private static func candidateDisplayPath(
+        path: WorkspacePath,
+        resolvedRoot: WorkspacePath,
+        rootArgument: String,
+        currentDirectory: WorkspacePath
+    ) -> String {
+        if rootArgument.hasPrefix("/") {
+            return path.string
+        }
+
+        let relativeRoot = relativeChildPath(path: resolvedRoot, root: currentDirectory) ?? resolvedRoot.string
+        let relativePath = relativeChildPath(path: path, root: resolvedRoot) ?? path.basename
+
+        if relativePath == "." {
+            return relativeRoot.isEmpty ? path.basename : relativeRoot
+        }
+        if relativeRoot.isEmpty || relativeRoot == "." {
+            return relativePath
+        }
+        return "\(relativeRoot)/\(relativePath)"
+    }
+
+    private static func relativeChildPath(path: WorkspacePath, root: WorkspacePath) -> String? {
+        if path == root {
+            return "."
+        }
+
+        let prefix = root.isRoot ? "/" : root.string + "/"
+        guard path.string.hasPrefix(prefix) else {
+            return nil
+        }
+        return String(path.string.dropFirst(prefix.count))
     }
 
     private static func matchesGlobs(path: String, globs: [NSRegularExpression]) -> Bool {
