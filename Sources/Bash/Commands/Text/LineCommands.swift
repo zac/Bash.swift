@@ -257,6 +257,70 @@ struct WcCommand: BuiltinCommand {
     }
 }
 
+struct NlCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Option(name: .short, help: "Select numbering style")
+        var b: String = "t"
+
+        @Argument(help: "Optional files")
+        var files: [String] = []
+    }
+
+    static let name = "nl"
+    static let overview = "Number lines of files"
+
+    static func _toAnyBuiltinCommand() -> AnyBuiltinCommand {
+        makeNormalizedLineCommand(Self.self) { args in
+            normalizeNlArguments(args)
+        }
+    }
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        guard let mode = NumberingMode(rawValue: options.b) else {
+            context.writeStderr("nl: unsupported -b style '\(options.b)'\n")
+            return 1
+        }
+
+        let inputs = await CommandFS.readInputs(paths: options.files, context: &context)
+        for content in inputs.contents {
+            writeNumbered(content: content, mode: mode, context: &context)
+        }
+        return inputs.hadError ? 1 : 0
+    }
+
+    private enum NumberingMode: String {
+        case all = "a"
+        case nonEmpty = "t"
+
+        func includes(_ line: String) -> Bool {
+            switch self {
+            case .all:
+                return true
+            case .nonEmpty:
+                return !line.isEmpty
+            }
+        }
+    }
+
+    private static func writeNumbered(
+        content: String,
+        mode: NumberingMode,
+        context: inout CommandContext
+    ) {
+        let lines = CommandIO.splitLines(content)
+        var lineNumber = 1
+
+        for line in lines {
+            if mode.includes(line) {
+                context.writeStdout(String(format: "%6d\t%@\n", lineNumber, line))
+                lineNumber += 1
+            } else {
+                context.writeStdout("      \t\(line)\n")
+            }
+        }
+    }
+}
+
 private func shouldShowHeader(totalFiles: Int, quiet: Bool, verbose: Bool) -> Bool {
     if quiet {
         return false
@@ -362,6 +426,41 @@ private func normalizeAttachedValueOption(
     let valueStart = arg.index(after: optionIndex)
     let value = String(arg[valueStart...])
     return value.isEmpty ? nil : value
+}
+
+private func normalizeNlArguments(_ args: [String]) -> [String] {
+    var normalized: [String] = []
+    var passthrough = false
+    var expectsValue = false
+
+    for arg in args {
+        if passthrough {
+            normalized.append(arg)
+            continue
+        }
+
+        if arg == "--" {
+            passthrough = true
+            normalized.append(arg)
+            continue
+        }
+
+        if expectsValue {
+            normalized.append(arg)
+            expectsValue = false
+            continue
+        }
+
+        if let value = normalizeAttachedValueOption(arg, option: "b") {
+            normalized.append(contentsOf: ["-b", value])
+            continue
+        }
+
+        normalized.append(arg)
+        expectsValue = arg == "-b" || arg == "--b"
+    }
+
+    return normalized
 }
 
 private func normalizeLegacyBareLineCount(

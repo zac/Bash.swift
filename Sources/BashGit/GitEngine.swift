@@ -89,11 +89,26 @@ private enum GitEngineLibgit2 {
             case "status":
                 return try await runStatus(arguments: remaining, context: &context)
 
+            case "diff":
+                return try await runDiff(arguments: remaining, context: &context)
+
+            case "show":
+                return try await runShow(arguments: remaining, context: &context)
+
             case "add":
                 return try await runAdd(arguments: remaining, context: &context)
 
+            case "branch":
+                return try await runBranch(arguments: remaining, context: &context)
+
+            case "remote":
+                return try await runRemote(arguments: remaining, context: &context)
+
             case "commit":
                 return try await runCommit(arguments: remaining, context: &context)
+
+            case "config":
+                return try await runConfig(arguments: remaining, context: &context)
 
             case "log":
                 return try await runLog(arguments: remaining, context: &context)
@@ -128,11 +143,16 @@ private enum GitEngineLibgit2 {
         SUBCOMMANDS:
           init [path]
           clone <repository> [directory]
-          status [--short]
+          status [--short] [--branch]
+          diff [--stat|--name-only]
+          show --stat
           add [-A|--all] <paths...>
+          branch --show-current
+          remote [-v]
           commit -m <message>
+          config <user.name|user.email> [value]
           log [--oneline] [-n <count>]
-          rev-parse --is-inside-work-tree
+          rev-parse <--is-inside-work-tree|--abbrev-ref HEAD>
           version
 
         """
@@ -224,12 +244,18 @@ private enum GitEngineLibgit2 {
 
     private static func runStatus(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
         var short = false
+        var branch = false
         for argument in arguments {
             switch argument {
             case "--short", "-s":
                 short = true
+            case "--branch", "-b":
+                branch = true
+            case "-sb", "-bs":
+                short = true
+                branch = true
             default:
-                throw GitEngineError.usage("usage: git status [--short]\n")
+                throw GitEngineError.usage("usage: git status [--short] [--branch]\n")
             }
         }
 
@@ -237,7 +263,68 @@ private enum GitEngineLibgit2 {
         defer { projection.cleanup() }
 
         let output = try withLibgit2 {
-            try statusOutput(localRoot: projection.localRoot, short: short)
+            try statusOutput(localRoot: projection.localRoot, short: short, branch: branch)
+        }
+
+        return GitExecutionResult(stdout: output, exitCode: 0)
+    }
+
+    private static func runDiff(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
+        var stat = false
+        var nameOnly = false
+
+        for argument in arguments {
+            switch argument {
+            case "--stat":
+                stat = true
+            case "--name-only":
+                nameOnly = true
+            default:
+                throw GitEngineError.usage("usage: git diff [--stat|--name-only]\n")
+            }
+        }
+
+        if stat == nameOnly {
+            throw GitEngineError.usage("usage: git diff [--stat|--name-only]\n")
+        }
+
+        let projection = try await requireRepositoryProjection(context: context)
+        defer { projection.cleanup() }
+
+        let output = try withLibgit2 {
+            let repository = try openRepository(path: projection.localRoot.path)
+            defer { git_repository_free(repository) }
+
+            let diff = try makeWorktreeDiff(repository: repository)
+            defer { git_diff_free(diff) }
+
+            if stat {
+                return try diffStatOutput(diff: diff)
+            }
+            return diffNameOnlyOutput(diff: diff)
+        }
+
+        return GitExecutionResult(stdout: output, exitCode: 0)
+    }
+
+    private static func runShow(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
+        guard arguments == ["--stat"] else {
+            throw GitEngineError.usage("usage: git show --stat\n")
+        }
+
+        let projection = try await requireRepositoryProjection(context: context)
+        defer { projection.cleanup() }
+
+        let output = try withLibgit2 {
+            let repository = try openRepository(path: projection.localRoot.path)
+            defer { git_repository_free(repository) }
+
+            guard let commit = try lookupHeadCommit(repository: repository) else {
+                throw GitEngineError.runtime("your current branch does not have any commits yet")
+            }
+            defer { git_commit_free(commit) }
+
+            return try showStatOutput(repository: repository, commit: commit)
         }
 
         return GitExecutionResult(stdout: output, exitCode: 0)
@@ -306,6 +393,46 @@ private enum GitEngineLibgit2 {
         return GitExecutionResult(exitCode: 0)
     }
 
+    private static func runBranch(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
+        guard arguments == ["--show-current"] else {
+            throw GitEngineError.usage("usage: git branch --show-current\n")
+        }
+
+        let projection = try await requireRepositoryProjection(context: context)
+        defer { projection.cleanup() }
+
+        let output = try withLibgit2 {
+            let repository = try openRepository(path: projection.localRoot.path)
+            defer { git_repository_free(repository) }
+            return try branchNameForDisplay(repository: repository).map { "\($0)\n" } ?? ""
+        }
+
+        return GitExecutionResult(stdout: output, exitCode: 0)
+    }
+
+    private static func runRemote(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
+        var verbose = false
+        for argument in arguments {
+            switch argument {
+            case "-v", "--verbose":
+                verbose = true
+            default:
+                throw GitEngineError.usage("usage: git remote [-v]\n")
+            }
+        }
+
+        let projection = try await requireRepositoryProjection(context: context)
+        defer { projection.cleanup() }
+
+        let output = try withLibgit2 {
+            let repository = try openRepository(path: projection.localRoot.path)
+            defer { git_repository_free(repository) }
+            return try remoteOutput(repository: repository, verbose: verbose)
+        }
+
+        return GitExecutionResult(stdout: output, exitCode: 0)
+    }
+
     private static func runCommit(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
         let message = try parseCommitMessage(arguments)
         let projection = try await requireRepositoryProjection(context: context)
@@ -348,7 +475,7 @@ private enum GitEngineLibgit2 {
                 }
             }
 
-            let signature = try createSignature(environment: context.environment)
+            let signature = try createSignature(repository: repository, environment: context.environment)
             defer { git_signature_free(signature) }
 
             var commitOID = git_oid()
@@ -435,23 +562,70 @@ private enum GitEngineLibgit2 {
         return GitExecutionResult(stdout: output, exitCode: 0)
     }
 
-    private static func runRevParse(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
-        guard arguments == ["--is-inside-work-tree"] else {
-            throw GitEngineError.usage("usage: git rev-parse --is-inside-work-tree\n")
+    private static func runConfig(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
+        guard arguments.count == 1 || arguments.count == 2 else {
+            throw GitEngineError.usage("usage: git config <user.name|user.email> [value]\n")
         }
 
+        let key = arguments[0]
+        guard key == "user.name" || key == "user.email" else {
+            throw GitEngineError.usage("usage: git config <user.name|user.email> [value]\n")
+        }
+
+        let projection = try await requireRepositoryProjection(context: context)
+        defer { projection.cleanup() }
+
+        let result = try withLibgit2 {
+            let repository = try openRepository(path: projection.localRoot.path)
+            defer { git_repository_free(repository) }
+
+            if arguments.count == 2 {
+                try setConfigValue(repository: repository, key: key, value: arguments[1])
+                return GitExecutionResult(exitCode: 0)
+            }
+
+            guard let value = try configValue(repository: repository, key: key) else {
+                return GitExecutionResult(exitCode: 1)
+            }
+            return GitExecutionResult(stdout: "\(value)\n", exitCode: 0)
+        }
+
+        if arguments.count == 2, result.exitCode == 0 {
+            try await projection.syncBack(filesystem: context.filesystem)
+        }
+        return result
+    }
+
+    private static func runRevParse(arguments: [String], context: inout CommandContext) async throws -> GitExecutionResult {
         let start = WorkspacePath(normalizing: context.currentDirectory)
-        if let _ = try await GitFilesystemProjection.findRepositoryRoot(
+        guard let _ = try await GitFilesystemProjection.findRepositoryRoot(
             from: start,
             filesystem: context.filesystem
-        ) {
-            return GitExecutionResult(stdout: "true\n", exitCode: 0)
+        ) else {
+            return GitExecutionResult(
+                stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
+                exitCode: 128
+            )
         }
 
-        return GitExecutionResult(
-            stderr: "fatal: not a git repository (or any of the parent directories): .git\n",
-            exitCode: 128
-        )
+        switch arguments {
+        case ["--is-inside-work-tree"]:
+            return GitExecutionResult(stdout: "true\n", exitCode: 0)
+
+        case ["--abbrev-ref", "HEAD"]:
+            let projection = try await requireRepositoryProjection(context: context)
+            defer { projection.cleanup() }
+            let output = try withLibgit2 {
+                let repository = try openRepository(path: projection.localRoot.path)
+                defer { git_repository_free(repository) }
+                let branch = try branchNameForDisplay(repository: repository) ?? "HEAD"
+                return "\(branch)\n"
+            }
+            return GitExecutionResult(stdout: output, exitCode: 0)
+
+        default:
+            throw GitEngineError.usage("usage: git rev-parse <--is-inside-work-tree|--abbrev-ref HEAD>\n")
+        }
     }
 
     private static func runVersion(arguments: [String]) throws -> GitExecutionResult {
@@ -649,7 +823,7 @@ private enum GitEngineLibgit2 {
         return message
     }
 
-    private static func statusOutput(localRoot: URL, short: Bool) throws -> String {
+    private static func statusOutput(localRoot: URL, short: Bool, branch: Bool) throws -> String {
         let repository = try openRepository(path: localRoot.path)
         defer { git_repository_free(repository) }
 
@@ -685,10 +859,15 @@ private enum GitEngineLibgit2 {
         lines.sort()
 
         if short {
-            if lines.isEmpty {
-                return ""
+            var output = ""
+            if branch {
+                let branchName = try branchNameForDisplay(repository: repository) ?? "HEAD"
+                output += "## \(branchName)\n"
             }
-            return lines.joined(separator: "\n") + "\n"
+            if !lines.isEmpty {
+                output += lines.joined(separator: "\n") + "\n"
+            }
+            return output
         }
 
         let branch = (try? currentBranchName(repository: repository)) ?? "HEAD"
@@ -754,6 +933,157 @@ private enum GitEngineLibgit2 {
         return output
     }
 
+    private static func makeWorktreeDiff(repository: OpaquePointer) throws -> OpaquePointer {
+        var indexPointer: OpaquePointer?
+        try check(git_repository_index(&indexPointer, repository), action: "open repository index")
+        guard let indexPointer else {
+            throw GitEngineError.runtime("failed to open repository index")
+        }
+        defer { git_index_free(indexPointer) }
+
+        var options = git_diff_options()
+        try check(git_diff_options_init(&options, UInt32(GIT_DIFF_OPTIONS_VERSION)), action: "initialize diff options")
+
+        var diffPointer: OpaquePointer?
+        try check(
+            git_diff_index_to_workdir(&diffPointer, repository, indexPointer, &options),
+            action: "collect worktree diff"
+        )
+        guard let diffPointer else {
+            throw GitEngineError.runtime("failed to collect worktree diff")
+        }
+        return diffPointer
+    }
+
+    private static func diffNameOnlyOutput(diff: OpaquePointer) -> String {
+        let count = git_diff_num_deltas(diff)
+        var paths: [String] = []
+        paths.reserveCapacity(count)
+
+        for index in 0..<count {
+            guard let delta = git_diff_get_delta(diff, index) else {
+                continue
+            }
+            if let path = diffDeltaPath(delta: delta.pointee) {
+                paths.append(path)
+            }
+        }
+
+        guard !paths.isEmpty else {
+            return ""
+        }
+        return paths.joined(separator: "\n") + "\n"
+    }
+
+    private static func diffStatOutput(diff: OpaquePointer) throws -> String {
+        let count = git_diff_num_deltas(diff)
+        guard count > 0 else {
+            return ""
+        }
+
+        var lines: [String] = []
+        lines.reserveCapacity(count)
+        var filesChanged = 0
+        var insertions = 0
+        var deletions = 0
+
+        for index in 0..<count {
+            guard let delta = git_diff_get_delta(diff, index) else {
+                continue
+            }
+            guard let path = diffDeltaPath(delta: delta.pointee) else {
+                continue
+            }
+
+            var patchPointer: OpaquePointer?
+            try check(git_patch_from_diff(&patchPointer, diff, index), action: "read diff patch")
+            let (lineAdds, lineDeletes): (Int, Int)
+            if let patchPointer {
+                defer { git_patch_free(patchPointer) }
+                var contexts: Int = 0
+                var additionsCount: Int = 0
+                var deletionsCount: Int = 0
+                try check(
+                    git_patch_line_stats(&contexts, &additionsCount, &deletionsCount, patchPointer),
+                    action: "read diff patch stats"
+                )
+                _ = contexts
+                lineAdds = additionsCount
+                lineDeletes = deletionsCount
+            } else {
+                lineAdds = 0
+                lineDeletes = 0
+            }
+
+            filesChanged += 1
+            insertions += lineAdds
+            deletions += lineDeletes
+
+            let changeCount = max(1, lineAdds + lineDeletes)
+            let histogram = String(repeating: "+", count: lineAdds) + String(repeating: "-", count: lineDeletes)
+            let renderedHistogram = histogram.isEmpty ? "+" : histogram
+            lines.append(" \(path) | \(changeCount) \(renderedHistogram)")
+        }
+
+        var summaryParts = ["\(filesChanged) file" + (filesChanged == 1 ? "" : "s") + " changed"]
+        if insertions > 0 {
+            summaryParts.append("\(insertions) insertion" + (insertions == 1 ? "" : "s") + "(+)")
+        }
+        if deletions > 0 {
+            summaryParts.append("\(deletions) deletion" + (deletions == 1 ? "" : "s") + "(-)")
+        }
+
+        return lines.joined(separator: "\n") + "\n " + summaryParts.joined(separator: ", ") + "\n"
+    }
+
+    private static func showStatOutput(repository: OpaquePointer, commit: OpaquePointer) throws -> String {
+        var treePointer: OpaquePointer?
+        try check(git_commit_tree(&treePointer, commit), action: "read commit tree")
+        guard let treePointer else {
+            throw GitEngineError.runtime("failed to read commit tree")
+        }
+        defer { git_tree_free(treePointer) }
+
+        var parentTreePointer: OpaquePointer?
+        if git_commit_parentcount(commit) > 0 {
+            var parentCommitPointer: OpaquePointer?
+            try check(git_commit_parent(&parentCommitPointer, commit, 0), action: "read parent commit")
+            if let parentCommitPointer {
+                defer { git_commit_free(parentCommitPointer) }
+                try check(git_commit_tree(&parentTreePointer, parentCommitPointer), action: "read parent tree")
+            }
+        }
+        var diffOptions = git_diff_options()
+        try check(git_diff_options_init(&diffOptions, UInt32(GIT_DIFF_OPTIONS_VERSION)), action: "initialize diff options")
+
+        var diffPointer: OpaquePointer?
+        try check(
+            git_diff_tree_to_tree(&diffPointer, repository, parentTreePointer, treePointer, &diffOptions),
+            action: "collect commit diff"
+        )
+        guard let diffPointer else {
+            throw GitEngineError.runtime("failed to collect commit diff")
+        }
+        defer { git_diff_free(diffPointer) }
+        if let parentTreePointer {
+            git_tree_free(parentTreePointer)
+        }
+
+        let subject = firstLine(of: git_commit_message(commit).map { String(cString: $0) } ?? "")
+        let commitID = oidString(git_commit_id(commit).pointee)
+        let authorLine: String
+        if let author = git_commit_author(commit) {
+            let name = author.pointee.name.map { String(cString: $0) } ?? "unknown"
+            let email = author.pointee.email.map { String(cString: $0) } ?? "unknown"
+            authorLine = "Author: \(name) <\(email)>"
+        } else {
+            authorLine = "Author: unknown <unknown>"
+        }
+
+        let stats = try diffStatOutput(diff: diffPointer)
+        return "commit \(commitID)\n\(authorLine)\n\n    \(subject)\n\n\(stats)"
+    }
+
     private static func openRepository(path: String) throws -> OpaquePointer {
         var repository: OpaquePointer?
         try withCString(path: path) { cPath in
@@ -767,6 +1097,10 @@ private enum GitEngineLibgit2 {
     }
 
     private static func currentBranchName(repository: OpaquePointer) throws -> String {
+        if let symbolicBranch = try symbolicHeadBranchName(repository: repository) {
+            return symbolicBranch
+        }
+
         var reference: OpaquePointer?
         let code = git_repository_head(&reference, repository)
         if code == GIT_EUNBORNBRANCH.rawValue {
@@ -783,6 +1117,18 @@ private enum GitEngineLibgit2 {
         return String(cString: shorthand)
     }
 
+    private static func branchNameForDisplay(repository: OpaquePointer) throws -> String? {
+        if let symbolicBranch = try symbolicHeadBranchName(repository: repository) {
+            return symbolicBranch
+        }
+
+        let isDetached = git_repository_head_detached(repository)
+        if isDetached == 1 {
+            return nil
+        }
+        return try currentBranchName(repository: repository)
+    }
+
     private static func lookupHeadCommit(repository: OpaquePointer) throws -> OpaquePointer? {
         var oid = git_oid()
         let oidCode = git_reference_name_to_id(&oid, repository, "HEAD")
@@ -796,9 +1142,14 @@ private enum GitEngineLibgit2 {
         return commit
     }
 
-    private static func createSignature(environment: [String: String]) throws -> UnsafeMutablePointer<git_signature> {
-        let authorName = environment["GIT_AUTHOR_NAME"] ?? environment["USER"] ?? "user"
-        let authorEmail = environment["GIT_AUTHOR_EMAIL"] ?? "\(authorName)@example.com"
+    private static func createSignature(
+        repository: OpaquePointer,
+        environment: [String: String]
+    ) throws -> UnsafeMutablePointer<git_signature> {
+        let configuredName = try configValue(repository: repository, key: "user.name")
+        let configuredEmail = try configValue(repository: repository, key: "user.email")
+        let authorName = environment["GIT_AUTHOR_NAME"] ?? configuredName ?? environment["USER"] ?? "user"
+        let authorEmail = environment["GIT_AUTHOR_EMAIL"] ?? configuredEmail ?? "\(authorName)@example.com"
 
         var signature: UnsafeMutablePointer<git_signature>?
         try withCString(path: authorName) { name in
@@ -811,6 +1162,31 @@ private enum GitEngineLibgit2 {
             throw GitEngineError.runtime("failed to create commit signature")
         }
         return signature
+    }
+
+    private static func symbolicHeadBranchName(repository: OpaquePointer) throws -> String? {
+        var reference: OpaquePointer?
+        let code = try withCString(path: "HEAD") { cName in
+            git_reference_lookup(&reference, repository, cName)
+        }
+        if code == GIT_ENOTFOUND.rawValue {
+            return nil
+        }
+        try check(code, action: "read HEAD reference")
+        guard let reference else {
+            return nil
+        }
+        defer { git_reference_free(reference) }
+
+        if let target = git_reference_symbolic_target(reference) {
+            let targetName = String(cString: target)
+            let prefix = "refs/heads/"
+            if targetName.hasPrefix(prefix) {
+                return String(targetName.dropFirst(prefix.count))
+            }
+            return targetName
+        }
+        return nil
     }
 
     private static func statusPath(entry: git_status_entry) -> String? {
@@ -850,6 +1226,93 @@ private enum GitEngineLibgit2 {
         }()
 
         return String([indexCode, worktreeCode])
+    }
+
+    private static func diffDeltaPath(delta: git_diff_delta) -> String? {
+        if let path = delta.new_file.path {
+            return String(cString: path)
+        }
+        if let path = delta.old_file.path {
+            return String(cString: path)
+        }
+        return nil
+    }
+
+    private static func configValue(repository: OpaquePointer, key: String) throws -> String? {
+        var configPointer: OpaquePointer?
+        try check(git_repository_config(&configPointer, repository), action: "open repository config")
+        guard let configPointer else {
+            throw GitEngineError.runtime("failed to open repository config")
+        }
+        defer { git_config_free(configPointer) }
+
+        var buffer = git_buf()
+        defer { git_buf_dispose(&buffer) }
+
+        let code = try withCString(path: key) { cKey in
+            git_config_get_string_buf(&buffer, configPointer, cKey)
+        }
+        if code == GIT_ENOTFOUND.rawValue {
+            return nil
+        }
+        try check(code, action: "read git config")
+        guard let pointer = buffer.ptr else {
+            return nil
+        }
+        return String(cString: pointer)
+    }
+
+    private static func setConfigValue(repository: OpaquePointer, key: String, value: String) throws {
+        var configPointer: OpaquePointer?
+        try check(git_repository_config(&configPointer, repository), action: "open repository config")
+        guard let configPointer else {
+            throw GitEngineError.runtime("failed to open repository config")
+        }
+        defer { git_config_free(configPointer) }
+
+        try withCString(path: key) { cKey in
+            try withCString(path: value) { cValue in
+                try check(git_config_set_string(configPointer, cKey, cValue), action: "write git config")
+            }
+        }
+    }
+
+    private static func remoteOutput(repository: OpaquePointer, verbose: Bool) throws -> String {
+        var remoteNames = git_strarray(strings: nil, count: 0)
+        try check(git_remote_list(&remoteNames, repository), action: "list remotes")
+        defer { git_strarray_dispose(&remoteNames) }
+
+        guard remoteNames.count > 0 else {
+            return ""
+        }
+
+        var lines: [String] = []
+        for index in 0..<Int(remoteNames.count) {
+            guard let names = remoteNames.strings, let namePointer = names[index] else {
+                continue
+            }
+            let name = String(cString: namePointer)
+            if !verbose {
+                lines.append(name)
+                continue
+            }
+
+            var remotePointer: OpaquePointer?
+            try withCString(path: name) { cName in
+                try check(git_remote_lookup(&remotePointer, repository, cName), action: "read remote '\(name)'")
+            }
+            guard let remotePointer else {
+                continue
+            }
+            defer { git_remote_free(remotePointer) }
+
+            let fetchURL = git_remote_url(remotePointer).map { String(cString: $0) } ?? ""
+            let pushURL = git_remote_pushurl(remotePointer).map { String(cString: $0) } ?? fetchURL
+            lines.append("\(name)\t\(fetchURL) (fetch)")
+            lines.append("\(name)\t\(pushURL) (push)")
+        }
+
+        return lines.isEmpty ? "" : lines.joined(separator: "\n") + "\n"
     }
 
     private static func withLibgit2<T>(_ body: () throws -> T) throws -> T {

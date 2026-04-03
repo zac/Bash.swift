@@ -22,6 +22,7 @@ extension BashSession {
             RgCommand.self,
             HeadCommand.self,
             TailCommand.self,
+            NlCommand.self,
             WcCommand.self,
             SortCommand.self,
             UniqCommand.self,
