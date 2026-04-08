@@ -368,7 +368,6 @@ private struct CommandsEnvelope: Decodable {
     }
 }
 
-@main
 struct BashEvalRunner: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "BashEvalRunner",
@@ -925,3 +924,5 @@ struct BashEvalRunner: AsyncParsableCommand {
         return "none"
     }
 }
+
+BashEvalRunner.main()
