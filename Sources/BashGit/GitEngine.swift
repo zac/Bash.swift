@@ -1,5 +1,5 @@
 import Foundation
-import Bash
+import BashCore
 
 #if canImport(CLibgit2)
 import CLibgit2

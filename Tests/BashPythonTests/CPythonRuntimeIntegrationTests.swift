@@ -1,9 +1,8 @@
 import Foundation
 import Testing
 import Bash
-import BashPython
 
-#if os(macOS)
+#if Python && os(macOS)
 @Suite("CPython Runtime Integration", .serialized)
 @BashPythonTestActor
 struct CPythonRuntimeIntegrationTests {

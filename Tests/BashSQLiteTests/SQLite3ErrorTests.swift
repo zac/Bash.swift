@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import Bash
-import BashSQLite
+
+#if SQLite
 
 @Suite("SQLite3 Errors")
 struct SQLite3ErrorTests {
@@ -57,3 +58,5 @@ struct SQLite3ErrorTests {
         #expect(withBail.stderrString.contains("syntax error"))
     }
 }
+
+#endif

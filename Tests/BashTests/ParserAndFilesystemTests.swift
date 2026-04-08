@@ -1,6 +1,7 @@
 import Foundation
 import Testing
-@testable import Bash
+@testable import BashCore
+import Bash
 
 @Suite("Parser and Filesystem")
 struct ParserAndFilesystemTests {

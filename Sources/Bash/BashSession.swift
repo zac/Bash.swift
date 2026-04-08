@@ -1,5 +1,5 @@
 import Foundation
-import Workspace
+import BashCore
 
 public final actor BashSession {
     let filesystemStore: any FileSystem
@@ -379,7 +379,7 @@ public final actor BashSession {
         )
 
         try await setupLayout()
-        await registerDefaultCommands()
+        await registerCompiledCommands()
     }
 
     private static func initialCurrentDirectory(for layout: SessionLayout) -> String {

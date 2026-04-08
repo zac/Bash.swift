@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import Bash
+import BashCore
 
 public struct Python3Command: BuiltinCommand {
     public struct Options: ParsableArguments {

@@ -1,5 +1,5 @@
 import Foundation
-import Bash
+import BashCore
 import BashCPythonBridge
 
 #if canImport(Darwin)

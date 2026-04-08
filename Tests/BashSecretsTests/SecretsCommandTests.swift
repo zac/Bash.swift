@@ -1,10 +1,31 @@
 import Foundation
 import Testing
 import Bash
-import BashSecrets
+
+#if Secrets
 
 @Suite("Secrets Command")
 struct SecretsCommandTests {
+    @Test("secrets command is disabled until a provider is enabled")
+    func secretsCommandIsDisabledUntilProviderIsEnabled() async throws {
+        let root = try SecretsTestSupport.makeTempDirectory(prefix: "BashSecretsTests-Disabled")
+        defer { SecretsTestSupport.removeDirectory(root) }
+
+        let session = try await BashSession(
+            rootDirectory: root,
+            options: SessionOptions(filesystem: ReadWriteFilesystem(), layout: .unixLike)
+        )
+
+        let missing = await session.run("secrets --help")
+        #expect(missing.exitCode == 127)
+
+        await session.enableSecrets(provider: InMemorySecretsProvider())
+
+        let available = await session.run("secrets --help")
+        #expect(available.exitCode == 0)
+        #expect(available.stdoutString.contains("USAGE: secrets"))
+    }
+
     @Test("help output and subcommand help")
     func helpOutputAndSubcommandHelp() async throws {
         let (session, root) = try await SecretsTestSupport.makeSession()
@@ -514,3 +535,5 @@ struct SecretsCommandTests {
         var label: String?
     }
 }
+
+#endif

@@ -1,6 +1,7 @@
 import Foundation
-import BashPython
 import Bash
+
+#if Python
 
 @globalActor
 actor BashPythonTestActor {
@@ -27,7 +28,6 @@ enum PythonTestSupport {
                 permissionHandler: permissionHandler
             )
         )
-        await session.registerPython()
         return (session, root)
     }
 
@@ -41,7 +41,6 @@ enum PythonTestSupport {
             permissionHandler: permissionHandler
         )
         let session = try await BashSession(options: options)
-        await session.registerPython()
         return session
     }
 
@@ -66,3 +65,5 @@ struct EchoPythonRuntime: PythonRuntime {
         "Python 3 (Echo Runtime)"
     }
 }
+
+#endif
