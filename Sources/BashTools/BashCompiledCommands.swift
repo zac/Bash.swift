@@ -62,6 +62,7 @@ package enum BashCompiledCommands {
             builtin(AwkCommand.self),
             builtin(SedCommand.self),
             builtin(XargsCommand.self),
+            builtin(XxdCommand.self),
             builtin(PrintfCommand.self),
             builtin(Base64Command.self),
             builtin(Sha256sumCommand.self),

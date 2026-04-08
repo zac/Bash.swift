@@ -850,6 +850,37 @@ struct SessionIntegrationTests {
         #expect(md5.stdoutString == "5d41402abc4b2a76b9719d911017c592  -\n")
     }
 
+    @Test("xxd formats stdin and files")
+    func xxdFormatsStdinAndFiles() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'Hello, world!\\n' > sample.txt")
+
+        let fromFile = await session.run("xxd sample.txt")
+        #expect(fromFile.exitCode == 0)
+        #expect(fromFile.stdoutString == "00000000: 4865 6c6c 6f2c 2077 6f72 6c64 210a       Hello, world!.\n")
+
+        let fromStdin = await session.run("printf 'Hello, world!\\n' | xxd -g 1 -c 8")
+        #expect(fromStdin.exitCode == 0)
+        #expect(
+            fromStdin.stdoutString ==
+                """
+                00000000: 48 65 6c 6c 6f 2c 20 77  Hello, w
+                00000008: 6f 72 6c 64 21 0a        orld!.
+                """
+                + "\n"
+        )
+
+        let sliced = await session.run("xxd -s 7 -l 5 sample.txt")
+        #expect(sliced.exitCode == 0)
+        #expect(sliced.stdoutString == "00000007: 776f 726c 64                             world\n")
+
+        let plainUpper = await session.run("xxd -p -u sample.txt")
+        #expect(plainUpper.exitCode == 0)
+        #expect(plainUpper.stdoutString == "48656C6C6F2C20776F726C64210A\n")
+    }
+
     @Test("chmod file and tree commands")
     func chmodFileAndTreeCommands() async throws {
         let (session, root) = try await TestSupport.makeSession()
