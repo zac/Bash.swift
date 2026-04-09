@@ -18,7 +18,9 @@ It provides:
 
 ## Installation
 
-Add `Bash` with SwiftPM:
+### SwiftPM integration
+
+Add `Bash` to your `Package.swift`:
 
 ```swift
 // Package.swift
@@ -33,7 +35,7 @@ Add `Bash` with SwiftPM:
 ]
 ```
 
-Traits are the way to compile optional toolsets into the package. Traits are default-off in `Bash.swift`.
+Traits are the way to compile optional toolsets into the package. Traits are default-off in `Bash.swift`, so add them on the package dependency when you need optional command sets:
 
 ```swift
 .dependencies: [
@@ -45,8 +47,25 @@ Traits are the way to compile optional toolsets into the package. Traits are def
 ]
 ```
 
+### Xcode integration
+
+Use Xcode 26.4 or newer if you want to configure package traits from the Xcode UI.
+
+1. Open your app or package project in Xcode.
+2. Select the project in the navigator, then open the `Package Dependencies` tab.
+3. Add `https://github.com/velos/Bash.swift.git`.
+4. Select the `Bash.swift` package dependency and choose the traits you want enabled.
+
+![Xcode Package Dependencies traits selector](docs/images/xcode-package-dependencies-traits.png)
+
+The traits shown in Xcode map directly to the SwiftPM traits in `Package.swift`. Enable only the features you need:
+- `Git`
+- `Python`
+- `SQLite`
+- `Secrets`
+
 Notes:
-- `Bash.swift` now depends on a separate `Workspace` package for the reusable filesystem layer.
+- `Bash.swift` depends on the [`Workspace`](https://github.com/velos/Workspace) package for the reusable filesystem layer.
 - `Bash` reexports the Workspace filesystem types, `BashCore`, `BashTools`, and any trait-enabled feature APIs, so downstream code only needs `import Bash`.
 - The `Python` trait uses a prebuilt `CPython.xcframework` binary target.
 - The `Git` trait uses a prebuilt `Clibgit2.xcframework` binary target.
