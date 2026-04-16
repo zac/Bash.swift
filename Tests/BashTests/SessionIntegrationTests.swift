@@ -51,6 +51,35 @@ struct SessionIntegrationTests {
         #expect(copy.stdoutString == "hi\n")
     }
 
+    @Test("stdout redirection with quoted here document writes file")
+    func stdoutRedirectionWithQuotedHereDocumentWritesFile() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let write = await session.run(
+            """
+            cat > test.py << 'EOF'
+            #!/usr/bin/env python3
+            print("Hello from Python! Bash execution test successful.")
+            EOF
+            """
+        )
+        #expect(write.exitCode == 0)
+        #expect(write.stdoutString.isEmpty)
+        #expect(write.stderrString.isEmpty)
+
+        let read = await session.run("cat test.py")
+        #expect(read.exitCode == 0)
+        #expect(
+            read.stdoutString ==
+                """
+                #!/usr/bin/env python3
+                print("Hello from Python! Bash execution test successful.")
+                """
+                + "\n"
+        )
+    }
+
     @Test("export and variable expansion")
     func exportAndVariableExpansion() async throws {
         let (session, root) = try await TestSupport.makeSession()

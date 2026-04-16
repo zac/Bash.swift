@@ -137,6 +137,21 @@ enum CommandText {
     }
 }
 
+enum CommandError {
+    static func describe(_ error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSPOSIXErrorDomain {
+            return String(cString: strerror(Int32(nsError.code)))
+        }
+
+        if let shellError = error as? ShellError {
+            return shellError.description
+        }
+
+        return error.localizedDescription
+    }
+}
+
 enum CommandHash {
     static func sha256(_ data: Data) -> String {
         SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()

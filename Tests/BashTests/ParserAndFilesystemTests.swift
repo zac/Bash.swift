@@ -164,6 +164,17 @@ struct ParserAndFilesystemTests {
         #expect(output.contains("tmp"))
     }
 
+    @Test("cat missing file reports unix-style error")
+    func catMissingFileReportsUnixStyleError() async throws {
+        let (session, root) = try await TestSupport.makeSession(filesystem: InMemoryFilesystem())
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("cat /etc/os-version")
+        #expect(result.exitCode == 1)
+        #expect(result.stdoutString.isEmpty)
+        #expect(result.stderrString == "cat: /etc/os-version: No such file or directory\n")
+    }
+
     @Test("path jail blocks symlink escape outside root")
     func pathJailBlocksSymlinkEscapeOutsideRoot() async throws {
         let (session, root) = try await TestSupport.makeSession()

@@ -23,7 +23,7 @@ struct CatCommand: BuiltinCommand {
                 let data = try await context.filesystem.readFile(path: context.resolvePath(file))
                 context.stdout.append(data)
             } catch {
-                context.writeStderr("\(file): \(error)\n")
+                context.writeStderr("cat: \(file): \(CommandError.describe(error))\n")
                 failed = true
             }
         }

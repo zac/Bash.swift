@@ -24,6 +24,10 @@ struct Python3CommandTests {
         let version = await session.run("python --version")
         #expect(version.exitCode == 0)
         #expect(version.stdoutString.contains("Python"))
+
+        let which = await session.run("which python3")
+        #expect(which.exitCode == 0)
+        #expect(which.stdoutString == "/bin/python3\n")
     }
 
     @Test("code mode and module mode parsing")
