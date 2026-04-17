@@ -8,9 +8,11 @@ import Darwin
 
 public struct CPythonConfiguration: Sendable {
     public var strictFilesystem: Bool
+    public var pythonHome: URL?
 
-    public init(strictFilesystem: Bool = true) {
+    public init(strictFilesystem: Bool = true, pythonHome: URL? = nil) {
         self.strictFilesystem = strictFilesystem
+        self.pythonHome = pythonHome
     }
 
     public static let `default` = CPythonConfiguration()
@@ -200,8 +202,18 @@ public actor CPythonRuntime: PythonRuntime {
         }
 
         var errorPointer: UnsafeMutablePointer<CChar>?
-        let runtimePointer = CPythonScripts.bootstrapScript.withCString { bootstrapCString in
-            bash_cpython_runtime_create(bootstrapCString, &errorPointer)
+        let pythonHome = configuration.pythonHome ?? Self.discoverPythonHome()
+        let runtimePointer: OpaquePointer?
+        if let pythonHome {
+            runtimePointer = CPythonScripts.bootstrapScript.withCString { bootstrapCString in
+                pythonHome.path.withCString { homeCString in
+                    bash_cpython_runtime_create_with_home(bootstrapCString, homeCString, &errorPointer)
+                }
+            }
+        } else {
+            runtimePointer = CPythonScripts.bootstrapScript.withCString { bootstrapCString in
+                bash_cpython_runtime_create(bootstrapCString, &errorPointer)
+            }
         }
 
         defer {
@@ -218,6 +230,60 @@ public actor CPythonRuntime: PythonRuntime {
 
         runtime = runtimePointer
         return runtimePointer
+    }
+
+    private static func discoverPythonHome() -> URL? {
+        let fileManager = FileManager.default
+        var candidates: [URL] = []
+
+        if let environmentHome = ProcessInfo.processInfo.environment["BASHSWIFT_PYTHONHOME"], !environmentHome.isEmpty {
+            candidates.append(URL(fileURLWithPath: environmentHome, isDirectory: true))
+        }
+
+        #if canImport(Darwin)
+        let frameworkBundles = Bundle.allFrameworks.filter { bundle in
+            bundle.bundleIdentifier == "org.python.python"
+                || bundle.bundleURL.lastPathComponent == "Python.framework"
+        }
+        for bundle in frameworkBundles {
+            if let resourceURL = bundle.resourceURL {
+                candidates.append(resourceURL.appendingPathComponent("python", isDirectory: true))
+            }
+            candidates.append(bundle.bundleURL.appendingPathComponent("Resources/python", isDirectory: true))
+            candidates.append(bundle.bundleURL.appendingPathComponent("Versions/Current", isDirectory: true))
+            candidates.append(bundle.bundleURL.appendingPathComponent("Versions/3.13", isDirectory: true))
+            candidates.append(bundle.bundleURL)
+        }
+        #endif
+
+        return candidates.first { candidate in
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: candidate.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                return false
+            }
+            return Self.containsPythonStdlib(at: candidate)
+        }
+    }
+
+    private static func containsPythonStdlib(at pythonHome: URL) -> Bool {
+        let libURL = pythonHome.appendingPathComponent("lib", isDirectory: true)
+        guard let entries = try? FileManager.default.contentsOfDirectory(
+            at: libURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+
+        return entries.contains { entry in
+            guard entry.lastPathComponent.hasPrefix("python") else {
+                return false
+            }
+            let osPath = entry.appendingPathComponent("os.py").path
+            let encodingsPath = entry.appendingPathComponent("encodings/__init__.py").path
+            return FileManager.default.fileExists(atPath: osPath)
+                && FileManager.default.fileExists(atPath: encodingsPath)
+        }
     }
 
     private func decodeExecutionResult(from resultJSON: String) throws -> PythonExecutionResult {

@@ -124,7 +124,7 @@ print(sql.stdoutString) // 1
 print(py.stdoutString)  // hi
 ```
 
-The `Python` trait embeds CPython directly. The current prebuilt runtime is available on macOS. Other Apple platforms still compile, but runtime execution returns unavailable errors. Filesystem access stays inside the shell's configured `FileSystem`, and escape APIs such as `subprocess`, `ctypes`, and `os.system` are intentionally blocked. Maintainer notes for the broader Apple runtime plan live in [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md).
+The `Python` trait embeds CPython directly. The package links the CPython binary target on macOS and iOS-family builds, including Mac Catalyst when the release artifact contains that slice. tvOS and watchOS still compile but report CPython as unavailable at runtime. Filesystem access stays inside the shell's configured `FileSystem`, and escape APIs such as `subprocess`, `ctypes`, and `os.system` are intentionally blocked. Maintainer notes for the self-contained Apple runtime artifact live in [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md).
 
 With `traits: ["Secrets"]` on the package dependency:
 

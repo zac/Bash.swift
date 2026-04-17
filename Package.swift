@@ -71,12 +71,12 @@ let package = Package(
             dependencies: [
                 .target(
                     name: "CPython",
-                    condition: .when(platforms: [.macOS])
+                    condition: .when(platforms: [.macOS, .iOS])
                 ),
             ],
             publicHeadersPath: "include",
             linkerSettings: [
-                .linkedFramework("Python", .when(platforms: [.macOS])),
+                .linkedFramework("Python", .when(platforms: [.macOS, .iOS])),
             ]
         ),
         .target(

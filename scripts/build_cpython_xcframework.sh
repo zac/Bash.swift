@@ -23,6 +23,12 @@ if ! command -v swift >/dev/null 2>&1; then
 fi
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SELF_CONTAINED="${SELF_CONTAINED:-1}"
+
+if [[ "$SELF_CONTAINED" == "1" ]]; then
+  exec "$ROOT_DIR/scripts/build_cpython_selfcontained_xcframework.sh"
+fi
+
 BUILD_DIR="${BUILD_DIR:-$ROOT_DIR/build/cpython}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build-cpython-apple-support}"
 BEEWARE_TAG="${BEEWARE_TAG:-3.13-b13}"

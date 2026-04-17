@@ -11,11 +11,11 @@ on:
         description: "GitHub release tag to create/update. Defaults to cpython-<beeware_tag> when empty."
         required: false
         default: ""
-      include_catalyst:
-        description: "Build and include a Mac Catalyst slice"
+      dry_run:
+        description: "Build and upload a workflow artifact without creating/updating a GitHub release."
         required: false
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
@@ -23,10 +23,22 @@ permissions:
 jobs:
   publish:
     runs-on: macos-latest
+    timeout-minutes: 360
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+
+      - name: Install host Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Print tool versions
+        run: |
+          xcodebuild -version
+          swift --version
+          python3.13 --version
 
       - name: Publish CPython release asset
         env:
@@ -35,13 +47,22 @@ jobs:
           GH_REPO: ${{ github.repository }}
           BEEWARE_TAG: ${{ inputs.beeware_tag }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          HOST_PYTHON: python3.13
         run: |
           if [[ -z "$RELEASE_TAG" ]]; then
             export RELEASE_TAG="cpython-${BEEWARE_TAG}"
           fi
 
-          if [[ "${{ inputs.include_catalyst }}" == "true" ]]; then
-            export BUILD_CATALYST=1
-          fi
-
           scripts/publish_cpython_release_asset.sh
+
+      - name: Upload CPython workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpython-xcframework-${{ inputs.beeware_tag }}
+          path: |
+            build/cpython/CPython.xcframework.zip
+            build/cpython/CPython.xcframework.checksum.txt
+            build/cpython/CPython.artifact-metadata.json
+          if-no-files-found: error
+          retention-days: 7

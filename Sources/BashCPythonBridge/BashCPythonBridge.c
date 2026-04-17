@@ -22,6 +22,7 @@ struct BashCPythonRuntime {
     void *network_context;
     int initialized;
     char *bootstrap_script;
+    char *python_home;
 };
 
 static char *bash_strdup(const char *input) {
@@ -99,6 +100,42 @@ static char *bash_python_error_string(void) {
     Py_XDECREF(ptraceback);
 
     return message;
+}
+
+static int bash_initialize_python(BashCPythonRuntime *runtime, char **error_out) {
+    if (runtime->python_home == NULL || runtime->python_home[0] == '\0') {
+        Py_Initialize();
+        if (!Py_IsInitialized()) {
+            bash_set_error(error_out, "failed to initialize CPython");
+            return 0;
+        }
+        return 1;
+    }
+
+    PyStatus status;
+    PyConfig config;
+    PyConfig_InitPythonConfig(&config);
+    config.use_environment = 0;
+    config.write_bytecode = 0;
+    config.buffered_stdio = 0;
+    config.install_signal_handlers = 0;
+
+    status = PyConfig_SetBytesString(&config, &config.home, runtime->python_home);
+    if (PyStatus_Exception(status)) {
+        bash_set_error(error_out, status.err_msg != NULL ? status.err_msg : "failed to configure CPython home");
+        PyConfig_Clear(&config);
+        return 0;
+    }
+
+    status = Py_InitializeFromConfig(&config);
+    if (PyStatus_Exception(status)) {
+        bash_set_error(error_out, status.err_msg != NULL ? status.err_msg : "failed to initialize CPython from config");
+        PyConfig_Clear(&config);
+        return 0;
+    }
+
+    PyConfig_Clear(&config);
+    return 1;
 }
 
 static PyObject *bashswift_fs_call(PyObject *self, PyObject *args) {
@@ -186,9 +223,7 @@ static int bash_ensure_initialized(BashCPythonRuntime *runtime, char **error_out
 
     int initialized_here = 0;
     if (!Py_IsInitialized()) {
-        Py_Initialize();
-        if (!Py_IsInitialized()) {
-            bash_set_error(error_out, "failed to initialize CPython");
+        if (!bash_initialize_python(runtime, error_out)) {
             return 0;
         }
         initialized_here = 1;
@@ -234,7 +269,11 @@ int bash_cpython_is_available(void) {
 #endif
 }
 
-BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, char **error_out) {
+BashCPythonRuntime *bash_cpython_runtime_create_with_home(
+    const char *bootstrap_script,
+    const char *python_home,
+    char **error_out
+) {
 #if BASHSWIFT_CPYTHON_AVAILABLE
     BashCPythonRuntime *runtime = (BashCPythonRuntime *)calloc(1, sizeof(BashCPythonRuntime));
     if (runtime == NULL) {
@@ -251,6 +290,18 @@ BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, ch
         }
     }
 
+    if (python_home != NULL && python_home[0] != '\0') {
+        runtime->python_home = bash_strdup(python_home);
+        if (runtime->python_home == NULL) {
+            if (runtime->bootstrap_script != NULL) {
+                free(runtime->bootstrap_script);
+            }
+            free(runtime);
+            bash_set_error(error_out, "failed to copy Python home path");
+            return NULL;
+        }
+    }
+
     runtime->initialized = 0;
     runtime->fs_handler = NULL;
     runtime->fs_context = NULL;
@@ -261,9 +312,14 @@ BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, ch
     return runtime;
 #else
     (void)bootstrap_script;
+    (void)python_home;
     bash_set_error(error_out, "CPython bridge is unavailable on this platform");
     return NULL;
 #endif
+}
+
+BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, char **error_out) {
+    return bash_cpython_runtime_create_with_home(bootstrap_script, NULL, error_out);
 }
 
 void bash_cpython_runtime_destroy(BashCPythonRuntime *runtime) {
@@ -287,6 +343,9 @@ void bash_cpython_runtime_destroy(BashCPythonRuntime *runtime) {
 
     if (runtime->bootstrap_script != NULL) {
         free(runtime->bootstrap_script);
+    }
+    if (runtime->python_home != NULL) {
+        free(runtime->python_home);
     }
 
     free(runtime);
