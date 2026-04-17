@@ -56,6 +56,80 @@ static int g_inittab_registered = 0;
 static PyThreadState *g_saved_thread_state = NULL;
 static int g_active_runtime_count = 0;
 
+static char *bash_strdup_pyunicode(PyObject *object) {
+    if (object == NULL) {
+        return NULL;
+    }
+
+    PyObject *string_value = PyObject_Str(object);
+    if (string_value == NULL) {
+        return NULL;
+    }
+
+    const char *utf8 = PyUnicode_AsUTF8(string_value);
+    char *message = utf8 != NULL ? bash_strdup(utf8) : NULL;
+    Py_DECREF(string_value);
+    return message;
+}
+
+static char *bash_format_python_traceback(PyObject *ptype, PyObject *pvalue, PyObject *ptraceback) {
+    if (ptype == NULL && pvalue == NULL && ptraceback == NULL) {
+        return NULL;
+    }
+
+    PyObject *traceback_module = PyImport_ImportModule("traceback");
+    if (traceback_module == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+
+    PyObject *format_exception = PyObject_GetAttrString(traceback_module, "format_exception");
+    if (format_exception == NULL) {
+        Py_DECREF(traceback_module);
+        PyErr_Clear();
+        return NULL;
+    }
+
+    PyObject *type_arg = ptype != NULL ? ptype : Py_None;
+    PyObject *value_arg = pvalue != NULL ? pvalue : Py_None;
+    PyObject *traceback_arg = ptraceback != NULL ? ptraceback : Py_None;
+    PyObject *formatted = PyObject_CallFunctionObjArgs(
+        format_exception,
+        type_arg,
+        value_arg,
+        traceback_arg,
+        NULL
+    );
+
+    Py_DECREF(format_exception);
+    Py_DECREF(traceback_module);
+
+    if (formatted == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+
+    PyObject *separator = PyUnicode_FromString("");
+    if (separator == NULL) {
+        Py_DECREF(formatted);
+        PyErr_Clear();
+        return NULL;
+    }
+
+    PyObject *joined = PyUnicode_Join(separator, formatted);
+    Py_DECREF(separator);
+    Py_DECREF(formatted);
+
+    if (joined == NULL) {
+        PyErr_Clear();
+        return NULL;
+    }
+
+    char *message = bash_strdup_pyunicode(joined);
+    Py_DECREF(joined);
+    return message;
+}
+
 static char *bash_python_error_string(void) {
     if (!PyErr_Occurred()) {
         return bash_strdup("unknown python error");
@@ -69,15 +143,10 @@ static char *bash_python_error_string(void) {
 
     char *message = NULL;
 
-    if (pvalue != NULL) {
-        PyObject *string_value = PyObject_Str(pvalue);
-        if (string_value != NULL) {
-            const char *utf8 = PyUnicode_AsUTF8(string_value);
-            if (utf8 != NULL) {
-                message = bash_strdup(utf8);
-            }
-            Py_DECREF(string_value);
-        }
+    message = bash_format_python_traceback(ptype, pvalue, ptraceback);
+
+    if (message == NULL && pvalue != NULL) {
+        message = bash_strdup_pyunicode(pvalue);
     }
 
     if (message == NULL && ptype != NULL) {
@@ -102,6 +171,36 @@ static char *bash_python_error_string(void) {
     return message;
 }
 
+static PyObject *bash_main_globals(void) {
+    PyObject *main_module = PyImport_AddModule("__main__");
+    if (main_module == NULL) {
+        return NULL;
+    }
+
+    return PyModule_GetDict(main_module);
+}
+
+static int bash_run_python_script(const char *script, char **error_out) {
+    PyObject *globals = bash_main_globals();
+    if (globals == NULL) {
+        char *message = bash_python_error_string();
+        bash_set_error(error_out, message);
+        free(message);
+        return 0;
+    }
+
+    PyObject *result = PyRun_StringFlags(script, Py_file_input, globals, globals, NULL);
+    if (result == NULL) {
+        char *message = bash_python_error_string();
+        bash_set_error(error_out, message);
+        free(message);
+        return 0;
+    }
+
+    Py_DECREF(result);
+    return 1;
+}
+
 static int bash_initialize_python(BashCPythonRuntime *runtime, char **error_out) {
     if (runtime->python_home == NULL || runtime->python_home[0] == '\0') {
         Py_Initialize();
@@ -119,6 +218,7 @@ static int bash_initialize_python(BashCPythonRuntime *runtime, char **error_out)
     config.write_bytecode = 0;
     config.buffered_stdio = 0;
     config.install_signal_handlers = 0;
+    config.site_import = 0;
 
     status = PyConfig_SetBytesString(&config, &config.home, runtime->python_home);
     if (PyStatus_Exception(status)) {
@@ -231,19 +331,13 @@ static int bash_ensure_initialized(BashCPythonRuntime *runtime, char **error_out
 
     PyGILState_STATE gstate = PyGILState_Ensure();
 
-    if (PyRun_SimpleString("import _bashswift_host\n") != 0) {
-        char *message = bash_python_error_string();
-        bash_set_error(error_out, message);
-        free(message);
+    if (!bash_run_python_script("import _bashswift_host\n", error_out)) {
         PyGILState_Release(gstate);
         return 0;
     }
 
     if (runtime->bootstrap_script != NULL) {
-        if (PyRun_SimpleString(runtime->bootstrap_script) != 0) {
-            char *message = bash_python_error_string();
-            bash_set_error(error_out, message);
-            free(message);
+        if (!bash_run_python_script(runtime->bootstrap_script, error_out)) {
             PyGILState_Release(gstate);
             return 0;
         }
@@ -396,18 +490,11 @@ char *bash_cpython_runtime_execute(
 
     PyGILState_STATE gstate = PyGILState_Ensure();
 
-    PyObject *main_module = PyImport_AddModule("__main__");
-    if (main_module == NULL) {
+    PyObject *globals = bash_main_globals();
+    if (globals == NULL) {
         char *message = bash_python_error_string();
         bash_set_error(error_out, message);
         free(message);
-        PyGILState_Release(gstate);
-        return NULL;
-    }
-
-    PyObject *globals = PyModule_GetDict(main_module);
-    if (globals == NULL) {
-        bash_set_error(error_out, "failed to load __main__ globals");
         PyGILState_Release(gstate);
         return NULL;
     }

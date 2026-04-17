@@ -14,6 +14,7 @@ require_command curl
 require_command ditto
 require_command lipo
 require_command make
+require_command nm
 require_command plutil
 require_command rsync
 require_command swift
@@ -175,8 +176,39 @@ write_static_setup_local() {
 
   printf '*static*\n\n' >"$setup_local"
   for module in "${modules[@]}"; do
-    awk -v module="$module" '$1 == module { print; found = 1 } END { exit found ? 0 : 1 }' "$setup_stdlib" \
+    awk -v module="$module" '
+      $1 == module {
+        print
+        found = 1
+        exit
+      }
+      $1 == "#" module {
+        sub(/^#/, "")
+        print
+        found = 1
+        exit
+      }
+      END {
+        exit found ? 0 : 1
+      }
+    ' "$setup_stdlib" \
       >>"$setup_local" || true
+  done
+}
+
+verify_static_modules() {
+  local framework_binary="$1"
+  shift
+
+  local symbols
+  local module
+  symbols="$(nm -gU "$framework_binary")"
+
+  for module in "$@"; do
+    if ! grep -q "_PyInit_${module}$" <<<"$symbols"; then
+      echo "error: missing statically linked CPython module ${module} in ${framework_binary}" >&2
+      exit 1
+    fi
   done
 }
 
@@ -350,6 +382,8 @@ build_mobile_architecture_framework() {
     echo "error: build did not produce Python.framework for ${name} ${arch}" >&2
     exit 1
   fi
+
+  verify_static_modules "$install_dir/Python.framework/Python" _struct math _random binascii _socket
 
   stage_framework_stdlib "$install_dir/Python.framework" "$install_dir/lib/python${PYTHON_SERIES}"
   update_mobile_framework_plist "$install_dir/Python.framework" "$sdk" "$bundle_platform" "$deployment_target"

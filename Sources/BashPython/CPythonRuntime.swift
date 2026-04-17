@@ -715,38 +715,68 @@ private final class BlockingResultBox<T>: @unchecked Sendable {
 
 private enum CPythonScripts {
     static let bootstrapScript = #"""
-import base64
 import builtins
 import io
-import importlib.abc
 import importlib.util
 import json
 import os
 import posixpath
 import runpy
-import socket
 import stat as _stat
 import sys
-import tempfile as _tempfile
 import traceback
-import uuid
 
 from _bashswift_host import fs_call as _bashswift_fs_call_raw
 from _bashswift_host import network_call as _bashswift_network_call_raw
 
 _BASHSWIFT_STATE = {
     'cwd': '/',
+    'temp_counter': 0,
 }
+
+_B64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+_B64_REVERSE = {value: index for index, value in enumerate(_B64_ALPHABET)}
 
 
 def _b64encode(data):
-    return base64.b64encode(data).decode('ascii')
+    if not data:
+        return ''
+
+    output = []
+    for index in range(0, len(data), 3):
+        chunk = data[index:index + 3]
+        padding = 3 - len(chunk)
+        value = int.from_bytes(chunk + (b'\0' * padding), 'big')
+        output.append(_B64_ALPHABET[(value >> 18) & 0x3f])
+        output.append(_B64_ALPHABET[(value >> 12) & 0x3f])
+        output.append('=' if padding >= 2 else _B64_ALPHABET[(value >> 6) & 0x3f])
+        output.append('=' if padding >= 1 else _B64_ALPHABET[value & 0x3f])
+    return ''.join(output)
 
 
 def _b64decode(text):
     if not text:
         return b''
-    return base64.b64decode(text.encode('ascii'))
+
+    clean = ''.join(str(text).split())
+    if len(clean) % 4 != 0:
+        raise ValueError('invalid base64 payload length')
+
+    output = bytearray()
+    for index in range(0, len(clean), 4):
+        quartet = clean[index:index + 4]
+        padding = quartet.count('=')
+        value = 0
+        for character in quartet:
+            value <<= 6
+            if character != '=':
+                value |= _B64_REVERSE[character]
+        output.append((value >> 16) & 0xff)
+        if padding < 2:
+            output.append((value >> 8) & 0xff)
+        if padding < 1:
+            output.append(value & 0xff)
+    return bytes(output)
 
 
 def _resolve_path(path, cwd=None):
@@ -1086,7 +1116,7 @@ class _ScandirIterator:
         self.close()
 
 
-class _BashSwiftLoader(importlib.abc.Loader):
+class _BashSwiftLoader:
     def __init__(self, path, is_package):
         self.path = path
         self._is_package = is_package
@@ -1118,7 +1148,7 @@ class _BashSwiftLoader(importlib.abc.Loader):
         exec(code, module.__dict__)
 
 
-class _BashSwiftFinder(importlib.abc.MetaPathFinder):
+class _BashSwiftFinder:
     def find_spec(self, fullname, path=None, target=None):
         del target
         parts = fullname.split('.')
@@ -1290,20 +1320,11 @@ def _patch_runtime():
     os.spawnv = _blocked
     os.spawnvp = _blocked
 
-    _original_socket_connect = socket.socket.connect
-    _original_socket_connect_ex = socket.socket.connect_ex
-    def _socket_connect(self, address):
-        _authorize_socket_target(address)
-        return _original_socket_connect(self, address)
-
-    def _socket_connect_ex(self, address):
-        _authorize_socket_target(address)
-        return _original_socket_connect_ex(self, address)
-
-    socket.socket.connect = _socket_connect
-    socket.socket.connect_ex = _socket_connect_ex
-
-    _tempfile.gettempdir = lambda: '/tmp'
+    def _module_available(name):
+        try:
+            return importlib.util.find_spec(name) is not None
+        except BaseException:
+            return False
 
     def _mkdtemp(suffix='', prefix='tmp', dir=None):
         suffix = suffix or ''
@@ -1311,7 +1332,9 @@ def _patch_runtime():
         base = _resolve_path(dir or '/tmp')
         _fs_call('mkdir', {'path': base, 'recursive': True})
         for _ in range(128):
-            candidate = _resolve_path(posixpath.join(base, f"{prefix}{uuid.uuid4().hex}{suffix}"))
+            _BASHSWIFT_STATE['temp_counter'] += 1
+            name = f"{prefix}bashswift-{_BASHSWIFT_STATE['temp_counter']:08x}{suffix}"
+            candidate = _resolve_path(posixpath.join(base, name))
             if not _exists(candidate):
                 _fs_call('mkdir', {'path': candidate, 'recursive': False})
                 return candidate
@@ -1334,8 +1357,104 @@ def _patch_runtime():
         def __exit__(self, exc_type, exc, tb):
             self.cleanup()
 
-    _tempfile.mkdtemp = _mkdtemp
-    _tempfile.TemporaryDirectory = _TemporaryDirectory
+    def _patch_tempfile_module(module):
+        if module is None or getattr(module, '__bashswift_patched__', False):
+            return module
+        module.gettempdir = lambda: '/tmp'
+        module.mkdtemp = _mkdtemp
+        module.TemporaryDirectory = _TemporaryDirectory
+        module.__bashswift_patched__ = True
+        return module
+
+    def _install_tempfile_fallback():
+        module = type(sys)('tempfile')
+        module.__file__ = '<bashswift-tempfile>'
+        _patch_tempfile_module(module)
+        sys.modules['tempfile'] = module
+
+    def _patch_socket_module(module):
+        if module is None or getattr(module, '__bashswift_patched__', False) or not hasattr(module, 'socket'):
+            return module
+
+        original_connect = module.socket.connect
+        original_connect_ex = module.socket.connect_ex
+
+        def _socket_connect(self, address):
+            _authorize_socket_target(address)
+            return original_connect(self, address)
+
+        def _socket_connect_ex(self, address):
+            _authorize_socket_target(address)
+            return original_connect_ex(self, address)
+
+        module.socket.connect = _socket_connect
+        module.socket.connect_ex = _socket_connect_ex
+        module.__bashswift_patched__ = True
+        return module
+
+    class _FallbackSocket:
+        def __init__(self, *args, **kwargs):
+            del args, kwargs
+            self._closed = False
+            self._timeout = None
+
+        def connect(self, address):
+            if self._closed:
+                raise OSError('socket is closed')
+            _authorize_socket_target(address)
+            raise OSError('socket networking is unavailable in this embedded Python build')
+
+        def connect_ex(self, address):
+            try:
+                self.connect(address)
+                return 0
+            except PermissionError:
+                raise
+            except OSError:
+                return 1
+
+        def close(self):
+            self._closed = True
+
+        def settimeout(self, value):
+            self._timeout = value
+
+        def gettimeout(self):
+            return self._timeout
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    def _install_socket_fallback():
+        module = type(sys)('socket')
+        module.__file__ = '<bashswift-socket>'
+        module.AF_INET = 2
+        module.AF_INET6 = 30
+        module.SOCK_STREAM = 1
+        module.error = OSError
+        module.timeout = TimeoutError
+        module.gaierror = OSError
+        module.socket = _FallbackSocket
+
+        def _create_connection(address, timeout=None, source_address=None):
+            del source_address
+            sock = _FallbackSocket()
+            sock.settimeout(timeout)
+            sock.connect(address)
+            return sock
+
+        module.create_connection = _create_connection
+        module.__bashswift_patched__ = True
+        sys.modules['socket'] = module
+
+    if not _module_available('math') or not _module_available('_random'):
+        _install_tempfile_fallback()
+
+    if not _module_available('math') or not _module_available('_socket'):
+        _install_socket_fallback()
 
     blocked_modules = {'subprocess', 'ctypes'}
     original_import = builtins.__import__
@@ -1344,7 +1463,13 @@ def _patch_runtime():
         root = (name or '').split('.', 1)[0]
         if root in blocked_modules:
             raise ImportError(f"module '{root}' is disabled in BashPython strict mode")
-        return original_import(name, globals, locals, fromlist, level)
+        module = original_import(name, globals, locals, fromlist, level)
+        if level == 0:
+            if root == 'socket':
+                _patch_socket_module(sys.modules.get('socket'))
+            elif root == 'tempfile':
+                _patch_tempfile_module(sys.modules.get('tempfile'))
+        return module
 
     builtins.__import__ = _strict_import
 
@@ -1371,40 +1496,6 @@ _patch_runtime()
 
 
 def __bashswift_execute(request_json):
-    payload = json.loads(request_json or '{}')
-
-    requested_cwd = payload.get('cwd') or '/'
-    _BASHSWIFT_STATE['cwd'] = _resolve_path(requested_cwd, cwd='/')
-
-    env = payload.get('env') or {}
-    if isinstance(env, dict):
-        os.environ.clear()
-        for key, value in env.items():
-            os.environ[str(key)] = str(value)
-    os.environ['PWD'] = _BASHSWIFT_STATE['cwd']
-
-    script_path = payload.get('scriptPath') or ''
-    source = payload.get('source') or ''
-    arguments = list(payload.get('arguments') or [])
-
-    argv0 = script_path or 'python3'
-    sys.argv = [argv0] + arguments
-
-    cwd_path = _BASHSWIFT_STATE['cwd']
-    while cwd_path in sys.path:
-        sys.path.remove(cwd_path)
-    sys.path.insert(0, cwd_path)
-
-    if script_path and script_path not in ('-c', '<stdin>'):
-        script_abs = _resolve_path(script_path)
-        script_dir = posixpath.dirname(script_abs) or '/'
-        while script_dir in sys.path:
-            sys.path.remove(script_dir)
-        sys.path.insert(0, script_dir)
-
-    stdin_text = payload.get('stdin') or ''
-    sys.stdin = io.StringIO(stdin_text)
-
     stdout_capture = io.StringIO()
     stderr_capture = io.StringIO()
     original_stdout = sys.stdout
@@ -1413,32 +1504,75 @@ def __bashswift_execute(request_json):
     exit_code = 0
 
     try:
-        sys.stdout = stdout_capture
-        sys.stderr = stderr_capture
+        payload = json.loads(request_json or '{}')
 
-        if payload.get('mode') == 'module':
-            runpy.run_module(source, run_name='__main__')
-        else:
-            script_name = script_path or '<string>'
-            globals_dict = {'__name__': '__main__'}
-            if script_name not in ('-c', '<stdin>', '<string>'):
-                globals_dict['__file__'] = _resolve_path(script_name)
-            exec(compile(source, script_name, 'exec'), globals_dict)
-    except SystemExit as system_exit:
-        code = system_exit.code
-        if code is None:
-            exit_code = 0
-        elif isinstance(code, int):
-            exit_code = int(code)
-        else:
+        requested_cwd = payload.get('cwd') or '/'
+        _BASHSWIFT_STATE['cwd'] = _resolve_path(requested_cwd, cwd='/')
+
+        env = payload.get('env') or {}
+        if isinstance(env, dict):
+            os.environ.clear()
+            for key, value in env.items():
+                os.environ[str(key)] = str(value)
+        os.environ['PWD'] = _BASHSWIFT_STATE['cwd']
+
+        script_path = payload.get('scriptPath') or ''
+        source = payload.get('source') or ''
+        arguments = list(payload.get('arguments') or [])
+
+        argv0 = script_path or 'python3'
+        sys.argv = [argv0] + arguments
+
+        cwd_path = _BASHSWIFT_STATE['cwd']
+        while cwd_path in sys.path:
+            sys.path.remove(cwd_path)
+        sys.path.insert(0, cwd_path)
+
+        if script_path and script_path not in ('-c', '<stdin>'):
+            script_abs = _resolve_path(script_path)
+            script_dir = posixpath.dirname(script_abs) or '/'
+            while script_dir in sys.path:
+                sys.path.remove(script_dir)
+            sys.path.insert(0, script_dir)
+
+        stdin_text = payload.get('stdin') or ''
+        sys.stdin = io.StringIO(stdin_text)
+
+        try:
+            sys.stdout = stdout_capture
+            sys.stderr = stderr_capture
+
+            if payload.get('mode') == 'module':
+                runpy.run_module(source, run_name='__main__')
+            else:
+                script_name = script_path or '<string>'
+                globals_dict = {'__name__': '__main__'}
+                if script_name not in ('-c', '<stdin>', '<string>'):
+                    globals_dict['__file__'] = _resolve_path(script_name)
+                exec(compile(source, script_name, 'exec'), globals_dict)
+        except SystemExit as system_exit:
+            code = system_exit.code
+            if code is None:
+                exit_code = 0
+            elif isinstance(code, int):
+                exit_code = int(code)
+            else:
+                exit_code = 1
+                print(code, file=stderr_capture)
+        except BaseException:
+            traceback.print_exc(file=stderr_capture)
             exit_code = 1
-            print(code, file=stderr_capture)
-    except Exception:
+        finally:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+    except BaseException:
+        try:
+            sys.stdout = original_stdout
+            sys.stderr = original_stderr
+        except BaseException:
+            pass
         traceback.print_exc(file=stderr_capture)
         exit_code = 1
-    finally:
-        sys.stdout = original_stdout
-        sys.stderr = original_stderr
 
     return json.dumps(
         {
