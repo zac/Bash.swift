@@ -23,8 +23,9 @@ library needs:
 - each supported slice contains `Python.framework`
 - iOS and Mac Catalyst slices statically link the selected native stdlib
   modules into `Python.framework`
-- pure-Python stdlib files live under
-  `Python.framework/Resources/python/lib/python3.13`
+- pure-Python stdlib files live under `Python.framework/lib/python3.13`
+  for iOS and Mac Catalyst slices, and under the versioned framework resources
+  for macOS
 - the resource stdlib excludes bulky or unsupported packages such as
   `test`, `idlelib`, `tkinter`, `ensurepip`, and `venv`
 
@@ -69,7 +70,7 @@ to build and upload the SwiftPM artifact:
 
 ```bash
 GH_REPO=velos/Bash.swift \
-RELEASE_TAG=cpython-3.13-b13-selfcontained \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-r3 \
 BEEWARE_TAG=3.13-b13 \
 scripts/publish_cpython_release_asset.sh
 ```
@@ -113,7 +114,7 @@ Recommended checks after publishing a new artifact:
 ```bash
 HOST_PYTHON=python3.13 \
 GH_REPO=velos/Bash.swift \
-RELEASE_TAG=cpython-3.13-b13-selfcontained-local \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-r3-local \
 BEEWARE_TAG=3.13-b13 \
 DRY_RUN=1 \
 scripts/publish_cpython_release_asset.sh

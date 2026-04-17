@@ -206,7 +206,7 @@ public actor CPythonRuntime: PythonRuntime {
         #if os(iOS) || os(tvOS) || os(watchOS)
         guard let requiredPythonHome = discoveredPythonHome else {
             let message = """
-            embedded CPython stdlib was not found. Ensure Python.framework resources are embedded and include python/lib/python3.13/encodings.
+            embedded CPython stdlib was not found. Ensure Python.framework resources are embedded and include lib/python3.13/encodings.
             """
             initializationError = message
             throw CPythonRuntimeError.initializationFailed(message)

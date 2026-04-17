@@ -14,6 +14,7 @@ require_command curl
 require_command ditto
 require_command lipo
 require_command make
+require_command plutil
 require_command rsync
 require_command swift
 require_command tar
@@ -182,7 +183,7 @@ write_static_setup_local() {
 stage_framework_stdlib() {
   local framework_path="$1"
   local stdlib_source="$2"
-  local resource_root="$framework_path/Resources/python"
+  local resource_root="$framework_path"
 
   if [[ -d "$framework_path/Versions" ]]; then
     local version_dir
@@ -206,6 +207,55 @@ stage_framework_stdlib() {
   find "$resource_root" \( -name "*.so" -o -name "*.dylib" -o -name "*.a" \) -delete
 }
 
+update_mobile_framework_plist() {
+  local framework_path="$1"
+  local sdk="$2"
+  local bundle_platform="$3"
+  local minimum_os_version="$4"
+  local plist_path="$framework_path/Info.plist"
+  local sdk_platform_version
+  local sdk_build_version
+  local sdk_name
+  local build_machine_os_build
+  local xcode_build_version
+  local xcode_version
+  local dt_xcode
+
+  if [[ ! -f "$plist_path" ]]; then
+    echo "error: missing Info.plist in ${framework_path}" >&2
+    exit 1
+  fi
+
+  sdk_platform_version="$(xcrun --sdk "$sdk" --show-sdk-platform-version)"
+  sdk_build_version="$(xcrun --sdk "$sdk" --show-sdk-build-version)"
+  sdk_name="${sdk}${sdk_platform_version}"
+  build_machine_os_build="$(sw_vers -buildVersion)"
+  xcode_build_version="$(xcodebuild -version | awk '/Build version/ { print $3; exit }')"
+  xcode_version="$(xcodebuild -version | awk '/Xcode/ { print $2; exit }')"
+  dt_xcode="$(printf '%s' "$xcode_version" | awk -F. '{ minor = ($2 == "" ? 0 : $2); printf "%d", ($1 * 100) + (minor * 10) }')"
+
+  plutil -replace BuildMachineOSBuild -string "$build_machine_os_build" "$plist_path"
+  plutil -replace CFBundleExecutable -string Python "$plist_path"
+  plutil -replace CFBundleIdentifier -string org.python.python "$plist_path"
+  plutil -replace CFBundleInfoDictionaryVersion -string 6.0 "$plist_path"
+  plutil -replace CFBundleName -string Python "$plist_path"
+  plutil -replace CFBundlePackageType -string FMWK "$plist_path"
+  plutil -replace CFBundleSupportedPlatforms -json "[\"${bundle_platform}\"]" "$plist_path"
+  plutil -replace MinimumOSVersion -string "$minimum_os_version" "$plist_path"
+  plutil -replace DTCompiler -string com.apple.compilers.llvm.clang.1_0 "$plist_path"
+  plutil -replace DTPlatformBuild -string "$sdk_build_version" "$plist_path"
+  plutil -replace DTPlatformName -string "$sdk" "$plist_path"
+  plutil -replace DTPlatformVersion -string "$sdk_platform_version" "$plist_path"
+  plutil -replace DTSDKBuild -string "$sdk_build_version" "$plist_path"
+  plutil -replace DTSDKName -string "$sdk_name" "$plist_path"
+  plutil -replace DTXcode -string "$dt_xcode" "$plist_path"
+  plutil -replace DTXcodeBuild -string "$xcode_build_version" "$plist_path"
+
+  if [[ "$bundle_platform" != "MacOSX" ]]; then
+    plutil -replace UIDeviceFamily -json "[1,2]" "$plist_path"
+  fi
+}
+
 build_mobile_architecture_framework() {
   local name="$1"
   local arch="$2"
@@ -214,7 +264,8 @@ build_mobile_architecture_framework() {
   local compiler_target_triple="$5"
   local configure_host_triple="$6"
   local deployment_target="$7"
-  local output_framework="$8"
+  local bundle_platform="$8"
+  local output_framework="$9"
   local arch_work_dir="$WORK_DIR/$name"
   local source_dir="$arch_work_dir/src/Python-${PYTHON_VERSION}"
   local install_dir="$arch_work_dir/install/python-${PYTHON_VERSION}"
@@ -301,6 +352,7 @@ build_mobile_architecture_framework() {
   fi
 
   stage_framework_stdlib "$install_dir/Python.framework" "$install_dir/lib/python${PYTHON_SERIES}"
+  update_mobile_framework_plist "$install_dir/Python.framework" "$sdk" "$bundle_platform" "$deployment_target"
 
   rm -rf "$output_framework"
   mkdir -p "$(dirname "$output_framework")"
@@ -381,6 +433,7 @@ build_mobile_architecture_framework \
   "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" \
   "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}" \
   "$IOS_DEPLOYMENT_TARGET" \
+  "iPhoneOS" \
   "$PYTHON_FRAMEWORKS_DIR/ios-arm64/Python.framework"
 
 build_mobile_architecture_framework \
@@ -391,6 +444,7 @@ build_mobile_architecture_framework \
   "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator" \
   "arm64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator" \
   "$IOS_DEPLOYMENT_TARGET" \
+  "iPhoneSimulator" \
   "$WORK_DIR/ios-simulator-arm64/Python.framework"
 
 build_mobile_architecture_framework \
@@ -401,6 +455,7 @@ build_mobile_architecture_framework \
   "x86_64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator" \
   "x86_64-apple-ios${IOS_DEPLOYMENT_TARGET}-simulator" \
   "$IOS_DEPLOYMENT_TARGET" \
+  "iPhoneSimulator" \
   "$WORK_DIR/ios-simulator-x86_64/Python.framework"
 
 merge_frameworks \
@@ -416,6 +471,7 @@ build_mobile_architecture_framework \
   "arm64-apple-ios${CATALYST_DEPLOYMENT_TARGET}-macabi" \
   "arm64-apple-ios${CATALYST_DEPLOYMENT_TARGET}-simulator" \
   "$CATALYST_DEPLOYMENT_TARGET" \
+  "MacOSX" \
   "$WORK_DIR/catalyst-arm64/Python.framework"
 
 build_mobile_architecture_framework \
@@ -426,6 +482,7 @@ build_mobile_architecture_framework \
   "x86_64-apple-ios${CATALYST_DEPLOYMENT_TARGET}-macabi" \
   "x86_64-apple-ios${CATALYST_DEPLOYMENT_TARGET}-simulator" \
   "$CATALYST_DEPLOYMENT_TARGET" \
+  "MacOSX" \
   "$WORK_DIR/catalyst-x86_64/Python.framework"
 
 merge_frameworks \
