@@ -1,7 +1,8 @@
 import Foundation
 import Testing
-import BashGit
 import Bash
+
+#if Git
 
 @Suite("Git Command")
 struct GitCommandTests {
@@ -299,3 +300,5 @@ struct GitCommandTests {
         #expect(result.stderrString.contains("not a git repository"))
     }
 }
+
+#endif

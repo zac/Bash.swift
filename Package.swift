@@ -15,22 +15,12 @@ let package = Package(
             name: "Bash",
             targets: ["Bash"]
         ),
-        .library(
-            name: "BashSQLite",
-            targets: ["BashSQLite"]
-        ),
-        .library(
-            name: "BashPython",
-            targets: ["BashPython"]
-        ),
-        .library(
-            name: "BashGit",
-            targets: ["BashGit"]
-        ),
-        .library(
-            name: "BashSecrets",
-            targets: ["BashSecrets"]
-        ),
+    ],
+    traits: [
+        "Git",
+        "Python",
+        "SQLite",
+        "Secrets",
     ],
     dependencies: [
         .package(url: "https://github.com/velos/Workspace.git", from: "0.2.0"),
@@ -49,29 +39,32 @@ let package = Package(
             checksum: "5afb0b07be17ec17b3fa075fcd87294f567c7de1e1df08926239f61277c2d8db"
         ),
         .target(
-            name: "Bash",
+            name: "BashCore",
             dependencies: [
                 .product(name: "Workspace", package: "Workspace"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ]
         ),
         .target(
-            name: "BashSQLite",
+            name: "BashGitFeature",
             dependencies: [
-                "Bash",
+                "BashCore",
+                "Clibgit2",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
+            path: "Sources/BashGit",
             linkerSettings: [
-                .linkedLibrary("sqlite3")
+                .linkedLibrary("iconv")
             ]
         ),
         .target(
-            name: "BashPython",
+            name: "BashPythonFeature",
             dependencies: [
-                "Bash",
+                "BashCore",
                 "BashCPythonBridge",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-            ]
+            ],
+            path: "Sources/BashPython"
         ),
         .target(
             name: "BashCPythonBridge",
@@ -87,67 +80,80 @@ let package = Package(
             ]
         ),
         .target(
-            name: "BashGit",
+            name: "BashSQLiteFeature",
             dependencies: [
-                "Bash",
-                "Clibgit2",
+                "BashCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
+            path: "Sources/BashSQLite",
             linkerSettings: [
-                .linkedLibrary("iconv")
+                .linkedLibrary("sqlite3")
             ]
         ),
         .target(
-            name: "BashSecrets",
+            name: "BashSecretsFeature",
             dependencies: [
-                "Bash",
+                "BashCore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
+            path: "Sources/BashSecrets",
             linkerSettings: [
                 .linkedFramework("Security")
+            ]
+        ),
+        .target(
+            name: "BashTools",
+            dependencies: [
+                "BashCore",
+                .product(name: "Workspace", package: "Workspace"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .target(name: "BashGitFeature", condition: .when(traits: ["Git"])),
+                .target(name: "BashPythonFeature", condition: .when(traits: ["Python"])),
+                .target(name: "BashSQLiteFeature", condition: .when(traits: ["SQLite"])),
+                .target(name: "BashSecretsFeature", condition: .when(traits: ["Secrets"])),
+            ]
+        ),
+        .target(
+            name: "Bash",
+            dependencies: [
+                "BashCore",
+                "BashTools",
+                .target(name: "BashGitFeature", condition: .when(traits: ["Git"])),
+                .target(name: "BashPythonFeature", condition: .when(traits: ["Python"])),
+                .target(name: "BashSQLiteFeature", condition: .when(traits: ["SQLite"])),
+                .target(name: "BashSecretsFeature", condition: .when(traits: ["Secrets"])),
             ]
         ),
         .executableTarget(
             name: "BashEvalRunner",
             dependencies: [
                 "Bash",
-                "BashGit",
-                "BashPython",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Yams", package: "Yams"),
             ]
         ),
         .testTarget(
             name: "BashTests",
-            dependencies: ["Bash"]
+            dependencies: [
+                "Bash",
+                "BashCore",
+            ]
         ),
         .testTarget(
             name: "BashSQLiteTests",
-            dependencies: [
-                "Bash",
-                "BashSQLite",
-            ]
+            dependencies: ["Bash"]
         ),
         .testTarget(
             name: "BashPythonTests",
-            dependencies: [
-                "Bash",
-                "BashPython",
-            ]
+            dependencies: ["Bash"]
         ),
         .testTarget(
             name: "BashGitTests",
-            dependencies: [
-                "Bash",
-                "BashGit",
-            ]
+            dependencies: ["Bash"]
         ),
         .testTarget(
             name: "BashSecretsTests",
-            dependencies: [
-                "Bash",
-                "BashSecrets",
-            ]
+            dependencies: ["Bash"]
         ),
     ]
 )

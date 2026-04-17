@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import Bash
-import BashSQLite
+
+#if SQLite
 
 @Suite("SQLite3 Execution")
 struct SQLite3ExecutionTests {
@@ -84,3 +85,5 @@ struct SQLite3ExecutionTests {
         #expect(query.stdoutString == "Alice\n")
     }
 }
+
+#endif

@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 import SQLite3
-import Bash
+import BashCore
 
 public struct SQLite3Command: BuiltinCommand {
     public struct Options: ParsableArguments {

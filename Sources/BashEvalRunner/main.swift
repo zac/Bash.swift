@@ -1,7 +1,5 @@
 import ArgumentParser
 import Bash
-import BashGit
-import BashPython
 import Foundation
 import Yams
 
@@ -236,9 +234,6 @@ final class BashSwiftEngine: CandidateEngine {
                 initialEnvironment: [Self.pwdHostRootEnvKey: effectiveHostRoot]
             )
         )
-        await BashPython.setCPythonRuntime()
-        await session.registerGit()
-        await session.registerPython()
         self.maxOutputBytes = maxOutputBytes
     }
 
@@ -373,7 +368,6 @@ private struct CommandsEnvelope: Decodable {
     }
 }
 
-@main
 struct BashEvalRunner: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "BashEvalRunner",
@@ -930,3 +924,5 @@ struct BashEvalRunner: AsyncParsableCommand {
         return "none"
     }
 }
+
+BashEvalRunner.main()

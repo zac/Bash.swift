@@ -1,6 +1,7 @@
 import Foundation
-import BashGit
 import Bash
+
+#if Git
 
 enum GitTestSupport {
     static func makeTempDirectory(prefix: String = "BashGitTests") throws -> URL {
@@ -24,7 +25,6 @@ enum GitTestSupport {
                 permissionHandler: permissionHandler
             )
         )
-        await session.registerGit()
         return (session, root)
     }
 
@@ -40,7 +40,6 @@ enum GitTestSupport {
                 permissionHandler: permissionHandler
             )
         )
-        await session.registerGit()
         return session
     }
 
@@ -48,3 +47,5 @@ enum GitTestSupport {
         try? FileManager.default.removeItem(at: url)
     }
 }
+
+#endif

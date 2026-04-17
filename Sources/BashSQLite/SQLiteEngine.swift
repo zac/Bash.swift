@@ -1,6 +1,6 @@
 import Foundation
 import SQLite3
-import Bash
+import BashCore
 
 enum SQLiteCell: Sendable {
     case null

@@ -1,7 +1,8 @@
 import Foundation
 import Testing
-import BashPython
 import Bash
+
+#if Python
 
 @Suite("Python3 Command", .serialized)
 @BashPythonTestActor
@@ -86,3 +87,5 @@ struct Python3CommandTests {
         #expect(result.stderrString.contains("does-not-exist.py"))
     }
 }
+
+#endif

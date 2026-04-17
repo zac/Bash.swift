@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import Bash
-import BashSQLite
+
+#if SQLite
 
 @Suite("SQLite3 Output Modes")
 struct SQLite3OutputModesTests {
@@ -63,3 +64,5 @@ struct SQLite3OutputModesTests {
         #expect(result.stdoutString == "1,x\n--\n2,NULL\n--\n")
     }
 }
+
+#endif

@@ -1,6 +1,7 @@
 import Foundation
-import BashSQLite
 import Bash
+
+#if SQLite
 
 enum SQLiteTestSupport {
     static func makeTempDirectory(prefix: String = "BashSQLiteTests") throws -> URL {
@@ -16,18 +17,17 @@ enum SQLiteTestSupport {
             rootDirectory: root,
             options: SessionOptions(filesystem: ReadWriteFilesystem(), layout: .unixLike)
         )
-        await session.registerSQLite3()
         return (session, root)
     }
 
     static func makeInMemorySession() async throws -> BashSession {
         let options = SessionOptions(filesystem: InMemoryFilesystem(), layout: .unixLike)
-        let session = try await BashSession(options: options)
-        await session.registerSQLite3()
-        return session
+        return try await BashSession(options: options)
     }
 
     static func removeDirectory(_ url: URL) {
         try? FileManager.default.removeItem(at: url)
     }
 }
+
+#endif

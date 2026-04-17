@@ -1,5 +1,5 @@
 import Foundation
-import Bash
+import BashCore
 
 public struct BashSecretsReferenceResolver: SecretReferenceResolving {
     public let provider: any SecretsProvider

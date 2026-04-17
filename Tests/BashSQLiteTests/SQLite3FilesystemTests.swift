@@ -1,7 +1,8 @@
 import Foundation
 import Testing
 import Bash
-import BashSQLite
+
+#if SQLite
 
 @Suite("SQLite3 Filesystem")
 struct SQLite3FilesystemTests {
@@ -31,18 +32,16 @@ struct SQLite3FilesystemTests {
         #expect(result.stderrString.contains("unable to open database file"))
     }
 
-    @Test("sqlite3 command can be registered on existing session")
-    func sqliteCommandCanBeRegisteredOnExistingSession() async throws {
+    @Test("sqlite3 command is auto-registered when compiled")
+    func sqliteCommandIsAutoRegisteredWhenCompiled() async throws {
         let root = try SQLiteTestSupport.makeTempDirectory()
         defer { SQLiteTestSupport.removeDirectory(root) }
 
         let session = try await BashSession(rootDirectory: root)
-        let missing = await session.run("sqlite3 --help")
-        #expect(missing.exitCode == 127)
-
-        await session.registerSQLite3()
         let available = await session.run("sqlite3 --help")
         #expect(available.exitCode == 0)
         #expect(available.stdoutString.contains("USAGE:"))
     }
 }
+
+#endif

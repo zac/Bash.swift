@@ -18,7 +18,9 @@ It provides:
 
 ## Installation
 
-Add `Bash` with SwiftPM:
+### SwiftPM integration
+
+Add `Bash` to your `Package.swift`:
 
 ```swift
 // Package.swift
@@ -33,17 +35,40 @@ Add `Bash` with SwiftPM:
 ]
 ```
 
-Optional products:
+Traits are the way to compile optional toolsets into the package. Traits are default-off in `Bash.swift`, so add them on the package dependency when you need optional command sets:
 
 ```swift
-dependencies: ["Bash", "BashSQLite", "BashPython", "BashGit", "BashSecrets"]
+.dependencies: [
+    .package(
+        url: "https://github.com/velos/Bash.swift.git",
+        from: "0.1.0",
+        traits: ["Git", "Python", "SQLite", "Secrets"]
+    )
+]
 ```
 
+### Xcode integration
+
+Use Xcode 26.4 or newer if you want to configure package traits from the Xcode UI.
+
+1. Open your app or package project in Xcode.
+2. Select the project in the navigator, then open the `Package Dependencies` tab.
+3. Add `https://github.com/velos/Bash.swift.git`.
+4. Select the `Bash.swift` package dependency and choose the traits you want enabled.
+
+![Xcode Package Dependencies traits selector](docs/images/xcode-package-dependencies-traits.png)
+
+The traits shown in Xcode map directly to the SwiftPM traits in `Package.swift`. Enable only the features you need:
+- `Git`
+- `Python`
+- `SQLite`
+- `Secrets`
+
 Notes:
-- `Bash.swift` now depends on a separate `Workspace` package for the reusable filesystem layer.
-- `Bash` reexports the Workspace filesystem types, so callers can use `FileSystem`, `WorkspacePath`, `ReadWriteFilesystem`, `InMemoryFilesystem`, `OverlayFilesystem`, `MountableFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem` directly from `Bash`.
-- `BashPython` uses a prebuilt `CPython.xcframework` binary target.
-- `BashGit` uses a prebuilt `Clibgit2.xcframework` binary target.
+- `Bash.swift` depends on the [`Workspace`](https://github.com/velos/Workspace) package for the reusable filesystem layer.
+- `Bash` reexports the Workspace filesystem types, `BashCore`, `BashTools`, and any trait-enabled feature APIs, so downstream code only needs `import Bash`.
+- The `Python` trait uses a prebuilt `CPython.xcframework` binary target.
+- The `Git` trait uses a prebuilt `Clibgit2.xcframework` binary target.
 
 Supported package platforms:
 - macOS 13+
@@ -80,56 +105,44 @@ let scoped = await session.run(
 )
 ```
 
-## Optional Modules
+## Optional Tool Traits
 
-Optional command sets must be registered at runtime.
+`Git`, `Python`, and `SQLite` are compiled in via traits and auto-register when `BashSession` starts. `Secrets` is also compiled in via a trait, but it stays disabled until you explicitly provide a secrets provider at runtime.
 
-`BashSQLite`:
-
-```swift
-import BashSQLite
-
-await session.registerSQLite3()
-let result = await session.run("sqlite3 :memory: \"select 1;\"")
-print(result.stdoutString) // 1
-```
-
-`BashPython`:
+With `traits: ["Git", "Python", "SQLite"]` on the package dependency:
 
 ```swift
-import BashPython
+import Bash
 
-await BashPython.setCPythonRuntime()
-await session.registerPython()
-let py = await session.run("python3 -c \"print('hi')\"")
-print(py.stdoutString) // hi
-```
+let session = try await BashSession(rootDirectory: root)
 
-`BashPython` embeds CPython directly. The current prebuilt runtime is available on macOS. Other Apple platforms still compile, but runtime execution returns unavailable errors. Filesystem access stays inside the shell's configured `FileSystem`, and escape APIs such as `subprocess`, `ctypes`, and `os.system` are intentionally blocked. Maintainer notes for the broader Apple runtime plan live in [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md).
-
-`BashGit`:
-
-```swift
-import BashGit
-
-await session.registerGit()
 _ = await session.run("git init")
+let sql = await session.run("sqlite3 :memory: \"select 1;\"")
+let py = await session.run("python3 -c \"print('hi')\"")
+
+print(sql.stdoutString) // 1
+print(py.stdoutString)  // hi
 ```
 
-`BashSecrets`:
+The `Python` trait embeds CPython directly. The current prebuilt runtime is available on macOS. Other Apple platforms still compile, but runtime execution returns unavailable errors. Filesystem access stays inside the shell's configured `FileSystem`, and escape APIs such as `subprocess`, `ctypes`, and `os.system` are intentionally blocked. Maintainer notes for the broader Apple runtime plan live in [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md).
+
+With `traits: ["Secrets"]` on the package dependency:
 
 ```swift
-import BashSecrets
+import Bash
 
+let session = try await BashSession(rootDirectory: root)
 let provider = AppleKeychainSecretsProvider()
-await session.registerSecrets(provider: provider)
+
+await session.enableSecrets(provider: provider)
+
 let ref = await session.run(
     "secrets put --service app --account api",
     stdin: Data("token".utf8)
 )
 ```
 
-`BashSecrets` uses provider-owned opaque `secretref:...` references. `secrets get --reveal` is explicit, and `.resolveAndRedact` or `.strict` policies keep plaintext out of caller-visible output by default.
+The `Secrets` trait uses provider-owned opaque `secretref:...` references. `secrets get --reveal` is explicit, and `.resolveAndRedact` or `.strict` policies keep plaintext out of caller-visible output by default.
 
 ## Workspace Package
 
@@ -170,6 +183,8 @@ public final actor BashSession {
 }
 ```
 
+When built with the `Secrets` trait, `BashSession` also exposes `enableSecrets(provider:policy:redactor:)`.
+
 High-level types:
 - `CommandResult`: `stdout`, `stderr`, `exitCode`, plus string helpers
 - `RunOptions`: per-run `stdin`, environment overrides, temporary `cwd`, execution limits, and cancellation probe
@@ -195,14 +210,14 @@ Current hardening layers include:
 - Optional permission callbacks for filesystem and network access
 - `ShellNetworkPolicy` with default-off HTTP(S), host allowlists, URL-prefix allowlists, and private-range blocking
 - Execution budgets through `ExecutionLimits`
-- Strict `BashPython` shims that block process and FFI escape APIs
+- Strict `Python` trait shims that block process and FFI escape APIs
 - Secret-reference resolution and redaction policies
 
 Important notes:
 - Outbound HTTP(S) is disabled by default
 - `permissionHandler` applies after the built-in network policy passes
 - Permission wait time is excluded from `timeout` and run-level wall-clock accounting
-- `curl` / `wget`, `git clone`, and `BashPython` socket connections share the same network policy path
+- `curl` / `wget`, `git clone`, and `Python` trait socket connections share the same network policy path
 - `data:` URLs and jailed `file:` URLs do not trigger outbound network checks
 
 ## Filesystem Model
@@ -266,10 +281,10 @@ Core built-in coverage includes:
 - Network commands: `curl`, `wget`, `html-to-markdown`
 
 Optional command sets:
-- `sqlite3` via `BashSQLite`
-- `python3` / `python` via `BashPython`
-- `git` via `BashGit`
-- `secrets` / `secret` via `BashSecrets`
+- `sqlite3` via the `SQLite` trait
+- `python3` / `python` via the `Python` trait
+- `git` via the `Git` trait
+- `secrets` / `secret` via the `Secrets` trait after `enableSecrets(...)`
 
 ## Testing
 
@@ -279,4 +294,11 @@ Run the test suite with:
 swift test
 ```
 
-The repository includes parser, filesystem, integration, command coverage, and optional-module tests.
+Trait-specific coverage is available through SwiftPM traits, for example:
+
+```bash
+swift test --disable-default-traits
+swift test --traits Git,Python,SQLite,Secrets
+```
+
+The repository includes parser, filesystem, integration, command coverage, and trait-gated feature tests.

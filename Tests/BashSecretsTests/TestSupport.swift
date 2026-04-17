@@ -1,6 +1,7 @@
 import Foundation
 import Bash
-import BashSecrets
+
+#if Secrets
 
 enum SecretsTestSupport {
     static func makeTempDirectory(prefix: String = "BashSecretsTests") throws -> URL {
@@ -16,7 +17,7 @@ enum SecretsTestSupport {
     ) async throws -> (session: BashSession, root: URL) {
         let root = try makeTempDirectory()
         let session = try await BashSession(rootDirectory: root, options: options)
-        await session.registerSecrets(provider: provider)
+        await session.enableSecrets(provider: provider)
         return (session, root)
     }
 
@@ -49,7 +50,7 @@ enum SecretsTestSupport {
                 networkPolicy: networkPolicy
             )
         )
-        await session.registerSecrets(provider: provider, policy: policy)
+        await session.enableSecrets(provider: provider, policy: policy)
         return session
     }
 
@@ -57,3 +58,5 @@ enum SecretsTestSupport {
         try? FileManager.default.removeItem(at: url)
     }
 }
+
+#endif
