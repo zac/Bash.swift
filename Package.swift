@@ -36,8 +36,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "CPython",
-            url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13/CPython.xcframework.zip",
-            checksum: "5afb0b07be17ec17b3fa075fcd87294f567c7de1e1df08926239f61277c2d8db"
+            url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13-selfcontained/CPython.xcframework.zip",
+            checksum: "3caacedb3f5983430114d9263f6b9da8a3c198c97e7eb2d84616563afe124bcd"
         ),
         .target(
             name: "BashCore",

@@ -69,7 +69,7 @@ to build and upload the SwiftPM artifact:
 
 ```bash
 GH_REPO=velos/Bash.swift \
-RELEASE_TAG=cpython-3.13-b13 \
+RELEASE_TAG=cpython-3.13-b13-selfcontained \
 BEEWARE_TAG=3.13-b13 \
 scripts/publish_cpython_release_asset.sh
 ```
@@ -113,7 +113,7 @@ Recommended checks after publishing a new artifact:
 ```bash
 HOST_PYTHON=python3.13 \
 GH_REPO=velos/Bash.swift \
-RELEASE_TAG=cpython-3.13-b13-local \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-local \
 BEEWARE_TAG=3.13-b13 \
 DRY_RUN=1 \
 scripts/publish_cpython_release_asset.sh

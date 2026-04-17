@@ -201,8 +201,22 @@ public actor CPythonRuntime: PythonRuntime {
             throw CPythonRuntimeError.unavailable(message)
         }
 
+        let discoveredPythonHome = configuration.pythonHome ?? Self.discoverPythonHome()
+
+        #if os(iOS) || os(tvOS) || os(watchOS)
+        guard let requiredPythonHome = discoveredPythonHome else {
+            let message = """
+            embedded CPython stdlib was not found. Ensure Python.framework resources are embedded and include python/lib/python3.13/encodings.
+            """
+            initializationError = message
+            throw CPythonRuntimeError.initializationFailed(message)
+        }
+        let pythonHome: URL? = requiredPythonHome
+        #else
+        let pythonHome = discoveredPythonHome
+        #endif
+
         var errorPointer: UnsafeMutablePointer<CChar>?
-        let pythonHome = configuration.pythonHome ?? Self.discoverPythonHome()
         let runtimePointer: OpaquePointer?
         if let pythonHome {
             runtimePointer = CPythonScripts.bootstrapScript.withCString { bootstrapCString in
@@ -241,18 +255,50 @@ public actor CPythonRuntime: PythonRuntime {
         }
 
         #if canImport(Darwin)
+        func appendFrameworkCandidates(_ frameworkURL: URL) {
+            if let bundle = Bundle(url: frameworkURL), let resourceURL = bundle.resourceURL {
+                candidates.append(resourceURL.appendingPathComponent("python", isDirectory: true))
+            }
+            candidates.append(frameworkURL.appendingPathComponent("Resources/python", isDirectory: true))
+
+            let versionsURL = frameworkURL.appendingPathComponent("Versions", isDirectory: true)
+            if let versions = try? fileManager.contentsOfDirectory(
+                at: versionsURL,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            ) {
+                for versionURL in versions.sorted(by: { $0.lastPathComponent < $1.lastPathComponent }) {
+                    candidates.append(versionURL.appendingPathComponent("Resources/python", isDirectory: true))
+                    candidates.append(versionURL)
+                }
+            }
+
+            candidates.append(frameworkURL.appendingPathComponent("Versions/Current/Resources/python", isDirectory: true))
+            candidates.append(frameworkURL.appendingPathComponent("Versions/Current", isDirectory: true))
+            candidates.append(frameworkURL.appendingPathComponent("Versions/3.13/Resources/python", isDirectory: true))
+            candidates.append(frameworkURL.appendingPathComponent("Versions/3.13", isDirectory: true))
+            candidates.append(frameworkURL)
+        }
+
+        if let pythonBundle = Bundle(identifier: "org.python.python") {
+            appendFrameworkCandidates(pythonBundle.bundleURL)
+        }
+
+        let mainBundleFrameworks: [URL] = [
+            Bundle.main.privateFrameworksURL?.appendingPathComponent("Python.framework", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Frameworks/Python.framework", isDirectory: true),
+            Bundle.main.bundleURL.appendingPathComponent("Contents/Frameworks/Python.framework", isDirectory: true),
+        ].compactMap(\.self)
+        for frameworkURL in mainBundleFrameworks {
+            appendFrameworkCandidates(frameworkURL)
+        }
+
         let frameworkBundles = Bundle.allFrameworks.filter { bundle in
             bundle.bundleIdentifier == "org.python.python"
                 || bundle.bundleURL.lastPathComponent == "Python.framework"
         }
         for bundle in frameworkBundles {
-            if let resourceURL = bundle.resourceURL {
-                candidates.append(resourceURL.appendingPathComponent("python", isDirectory: true))
-            }
-            candidates.append(bundle.bundleURL.appendingPathComponent("Resources/python", isDirectory: true))
-            candidates.append(bundle.bundleURL.appendingPathComponent("Versions/Current", isDirectory: true))
-            candidates.append(bundle.bundleURL.appendingPathComponent("Versions/3.13", isDirectory: true))
-            candidates.append(bundle.bundleURL)
+            appendFrameworkCandidates(bundle.bundleURL)
         }
         #endif
 
