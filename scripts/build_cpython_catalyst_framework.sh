@@ -35,13 +35,20 @@ resolve_host_python() {
   local version=""
 
   if [[ -n "$candidate" ]]; then
-    :
+    if [[ "$candidate" != */* ]]; then
+      candidate="$(command -v "$candidate" || true)"
+    fi
   elif command -v "python${requested_series}" >/dev/null 2>&1; then
     candidate="$(command -v "python${requested_series}")"
   elif command -v python3 >/dev/null 2>&1; then
     candidate="$(command -v python3)"
   else
     echo "error: python${requested_series} or python3 is required as the build python" >&2
+    exit 1
+  fi
+
+  if [[ -z "$candidate" || ! -x "$candidate" ]]; then
+    echo "error: HOST_PYTHON must resolve to an executable Python ${requested_series}.x binary" >&2
     exit 1
   fi
 
