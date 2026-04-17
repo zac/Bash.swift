@@ -72,6 +72,7 @@ Notes:
 
 Supported package platforms:
 - macOS 13+
+- Mac Catalyst 16+
 - iOS 16+
 - tvOS 16+
 - watchOS 9+
@@ -273,7 +274,7 @@ All built-ins support `--help`, and most also support `-h`.
 
 Core built-in coverage includes:
 - File operations: `cat`, `cp`, `ln`, `ls`, `mkdir`, `mv`, `readlink`, `rm`, `rmdir`, `stat`, `touch`, `chmod`, `file`, `tree`, `diff`
-- Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `xargs`, `printf`, `base64`, `sha256sum`, `sha1sum`, `md5sum`
+- Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `xargs`, `xxd`, `printf`, `base64`, `sha256sum`, `sha1sum`, `md5sum`
 - Data tools: `jq`, `yq`, `xan`
 - Compression and archives: `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 - Navigation and environment: `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`

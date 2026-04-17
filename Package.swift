@@ -6,6 +6,7 @@ let package = Package(
     name: "Bash",
     platforms: [
         .macOS(.v13),
+        .macCatalyst(.v16),
         .iOS(.v16),
         .tvOS(.v16),
         .watchOS(.v9),
@@ -71,12 +72,12 @@ let package = Package(
             dependencies: [
                 .target(
                     name: "CPython",
-                    condition: .when(platforms: [.macOS, .iOS])
+                    condition: .when(platforms: [.macOS, .macCatalyst, .iOS])
                 ),
             ],
             publicHeadersPath: "include",
             linkerSettings: [
-                .linkedFramework("Python", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Python", .when(platforms: [.macOS, .macCatalyst, .iOS])),
             ]
         ),
         .target(
