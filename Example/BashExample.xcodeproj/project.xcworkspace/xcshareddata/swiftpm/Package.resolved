@@ -1,0 +1,24 @@
+{
+  "originHash" : "7a5763631b87d334ff572ce5a26a5b135ac598692bd5369f9f8c5921f84a7c17",
+  "pins" : [
+    {
+      "identity" : "swift-argument-parser",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/apple/swift-argument-parser",
+      "state" : {
+        "revision" : "626b5b7b2f45e1b0b1c6f4a309296d1d21d7311b",
+        "version" : "1.7.1"
+      }
+    },
+    {
+      "identity" : "workspace",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/velos/Workspace.git",
+      "state" : {
+        "revision" : "f68074337d57acdf1b2b52ed457c15dc68184e24",
+        "version" : "0.2.0"
+      }
+    }
+  ],
+  "version" : 3
+}
