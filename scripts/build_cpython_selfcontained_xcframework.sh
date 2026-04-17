@@ -236,6 +236,14 @@ build_mobile_architecture_framework() {
   extract_dependency_archive "$WORK_DIR/downloads/openssl-${OPENSSL_VERSION}-${asset_target}.tar.gz" "$dependency_root/openssl"
   extract_dependency_archive "$WORK_DIR/downloads/xz-${XZ_VERSION}-${asset_target}.tar.gz" "$dependency_root/xz"
 
+  local framework_link_libs
+  framework_link_libs="-ldl -lpthread -lz -lsqlite3"
+  framework_link_libs+=" $dependency_root/mpdecimal/lib/libmpdec.a"
+  framework_link_libs+=" $dependency_root/bzip2/lib/libbz2.a"
+  framework_link_libs+=" $dependency_root/xz/lib/liblzma.a"
+  framework_link_libs+=" $dependency_root/openssl/lib/libssl.a"
+  framework_link_libs+=" $dependency_root/openssl/lib/libcrypto.a"
+
   rm -rf "$source_dir" "$install_dir"
   mkdir -p "$source_dir" "$install_dir"
   tar -xzf "$PYTHON_SOURCE_ARCHIVE" --strip-components 1 -C "$source_dir"
@@ -273,7 +281,7 @@ build_mobile_architecture_framework() {
     cd "$source_dir"
     PATH="$TOOLCHAIN_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin:/Library/Apple/usr/bin" \
       IPHONEOS_DEPLOYMENT_TARGET="$deployment_target" \
-      make -j"$BUILD_JOBS" all
+      make -j"$BUILD_JOBS" all LIBS="$framework_link_libs"
   ) 2>&1 | tee "$build_log_dir/build.log"
 
   echo "Installing CPython for ${name} (${arch})"
@@ -281,7 +289,7 @@ build_mobile_architecture_framework() {
     cd "$source_dir"
     PATH="$TOOLCHAIN_BIN_DIR:/usr/bin:/bin:/usr/sbin:/sbin:/Library/Apple/usr/bin" \
       IPHONEOS_DEPLOYMENT_TARGET="$deployment_target" \
-      make install
+      make install LIBS="$framework_link_libs"
   ) 2>&1 | tee "$build_log_dir/install.log"
 
   if [[ ! -d "$install_dir/Python.framework" ]]; then
