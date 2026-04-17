@@ -243,6 +243,9 @@ build_mobile_architecture_framework() {
   framework_link_libs+=" $dependency_root/xz/lib/liblzma.a"
   framework_link_libs+=" $dependency_root/openssl/lib/libssl.a"
   framework_link_libs+=" $dependency_root/openssl/lib/libcrypto.a"
+  framework_link_libs+=" $source_dir/Modules/expat/libexpat.a"
+  framework_link_libs+=" $source_dir/Modules/_hacl/libHacl_Hash_SHA2.a"
+  framework_link_libs+=" -lm"
 
   rm -rf "$source_dir" "$install_dir"
   mkdir -p "$source_dir" "$install_dir"
