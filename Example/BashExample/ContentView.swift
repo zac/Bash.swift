@@ -131,12 +131,6 @@ struct ContentView: View {
     @State private var viewModel = ViewModel()
 
     var body: some View {
-        let onSubmit = { () -> Void in
-            inputFocused = true
-            Task {
-                await viewModel.runCurrentCommand()
-            }
-        }
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading) {
@@ -152,32 +146,12 @@ struct ContentView: View {
                 .padding()
             }
             .safeAreaBar(edge: .bottom) {
-                TextField(
-                    "Prompt",
-                    text: $viewModel.command,
-                    axis: .vertical
-                )
-                .autocorrectionDisabled()
-                .focused($inputFocused)
-                .padding(12)
-                .lineLimit(1 ... 4)
-                .onSubmit(onSubmit)
-                #if !os(macOS)
-                .textInputAutocapitalization(.never)
-                .keyboardType(.asciiCapable)
-                .textFieldStyle(.plain)
-                .glassEffect(.regular, in: .containerRelative)
-                #endif
-                .background {
-                    Button {
-                        onSubmit()
-                    } label: {
-                        EmptyView()
+                PromptInputField(command: $viewModel.command, isFocused: _inputFocused) {
+                    inputFocused = true
+                    Task {
+                        await viewModel.runCurrentCommand()
                     }
-                    .keyboardShortcut(.defaultAction)
-                    .opacity(0)
                 }
-                .padding()
             }
             #if !os(macOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -194,6 +168,7 @@ struct ContentView: View {
             }
         }
         .sheet(isPresented: $viewModel.showBrowser) {
+            Group {
             if let homeURL = viewModel.workspaceHomeURL,
                let rootURL = viewModel.workspaceRootURL {
                 WorkspaceBrowserView(
@@ -203,6 +178,9 @@ struct ContentView: View {
             } else {
                 ProgressView()
             }
+
+            }
+            .frame(minHeight: 200)
         }
         .task {
             await viewModel.setup()
