@@ -21,7 +21,7 @@ struct PromptInputField: View {
         )
         .autocorrectionDisabled()
         .focused($isFocused)
-        .padding(12)
+        .padding()
         .lineLimit(1 ... 4)
         .onSubmit(onSubmit)
         #if !os(macOS)
@@ -29,7 +29,7 @@ struct PromptInputField: View {
         .keyboardType(.asciiCapable)
         #endif
         .textFieldStyle(.plain)
-        .glassEffect(.regular, in: .containerRelative)
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 24))
         .background {
             Button {
                 onSubmit()
@@ -39,6 +39,6 @@ struct PromptInputField: View {
             .keyboardShortcut(.defaultAction)
             .opacity(0)
         }
-        .padding()
+        .padding(.horizontal)
     }
 }

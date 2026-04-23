@@ -59,6 +59,7 @@ struct DirectoryBrowserView: View {
         }
         .navigationTitle(directoryTitle)
         #if !os(macOS)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             ToolbarItem(placement: .subtitle) {
                 Text(relativeDisplayPath(for: directoryURL))
