@@ -1,121 +1,136 @@
 # CPython Apple Runtime
 
-This repository currently ships a macOS-only embedded CPython runtime. The
-goal of the next iteration is to move to a broader Apple artifact that can
-cover:
+`BashPython` is designed around a single SwiftPM binary target:
+`CPython.xcframework.zip`. The artifact is published as a GitHub release asset
+and referenced from `Package.swift`.
+
+## Supported Runtime Targets
 
 - macOS
-- iOS and iPadOS
+- iOS and iPadOS device builds
+- iOS and iPadOS simulator builds
 - Mac Catalyst
 
-## What Exists Upstream
+tvOS and watchOS remain compile-only. `BashPython` can be imported there, but
+`BashPython.isCPythonRuntimeAvailable()` returns `false` and `python3` reports
+that embedded CPython is unavailable.
 
-- CPython officially documents building an iOS `Python.xcframework`.
-- BeeWare's `Python-Apple-support` publishes prebuilt support packages for
-  macOS and iOS, and those packages already contain mergeable
-  `Python.xcframework` bundles.
+## Artifact Layout
 
-Relevant upstream references:
+The release artifact should be self-contained for BashPython's standard
+library needs:
 
-- `https://docs.python.org/3.14/using/ios.html`
-- `https://github.com/beeware/Python-Apple-support`
-- `https://github.com/beeware/Python-Apple-support/blob/main/README.md`
+- each supported slice contains `Python.framework`
+- iOS and Mac Catalyst slices statically link the selected native stdlib
+  modules into `Python.framework`
+- pure-Python stdlib files live under `Python.framework/lib/python3.13`
+  for iOS and Mac Catalyst slices, and under the versioned framework resources
+  for macOS
+- the resource stdlib excludes bulky or unsupported packages such as
+  `test`, `idlelib`, `tkinter`, `ensurepip`, and `venv`
 
-## Build Script
+This avoids requiring consumer app targets to run CPython's normal iOS
+post-processing step for BashPython's bundled stdlib. Third-party Python
+packages with native binaries are still out of scope for this artifact and
+would need their own packaging story.
+
+## Build Step
 
 Use [build_cpython_xcframework.sh](../scripts/build_cpython_xcframework.sh)
-to assemble a release asset from BeeWare's published support packages:
+to create the self-contained release artifact:
 
 ```bash
 scripts/build_cpython_xcframework.sh
 ```
 
-By default the script:
+By default this delegates to
+[build_cpython_selfcontained_xcframework.sh](../scripts/build_cpython_selfcontained_xcframework.sh),
+which:
 
-- downloads BeeWare's macOS support package for `BEEWARE_TAG`
-- downloads BeeWare's iOS support package for `BEEWARE_TAG`
-- merges those frameworks into `build/cpython/CPython.xcframework`
+- reads Python and dependency versions from BeeWare's `Python-Apple-support`
+  metadata for `BEEWARE_TAG`
+- uses BeeWare's macOS framework slice
+- source-builds iOS device, iOS simulator, and Mac Catalyst slices
+- writes `Modules/Setup.local` so selected native stdlib modules are built
+  statically
+- copies the pure-Python stdlib into framework resources
 - packages `build/cpython/CPython.xcframework.zip`
-- prints the SwiftPM checksum
+- prints the SwiftPM checksum to paste into `Package.swift`
 
-To auto-build and include a Mac Catalyst framework slice in the same pass:
-
-```bash
-BUILD_CATALYST=1 \
-scripts/build_cpython_xcframework.sh
-```
-
-This repo also includes a dedicated helper,
-[build_cpython_catalyst_framework.sh](../scripts/build_cpython_catalyst_framework.sh),
-which builds a fat `arm64` + `x86_64` `Python.framework` for
-`*-apple-ios-macabi` from official CPython sources plus BeeWare's published
-`macabi` dependency archives. The builder defaults to a Mac Catalyst
-deployment target of `13.1`, which is the first Xcode-accepted `macabi`
-triple:
+The old BeeWare repackaging path is still available for comparison:
 
 ```bash
-scripts/build_cpython_catalyst_framework.sh
-```
-
-If you already have a Catalyst framework, the XCFramework build still accepts a
-manual path override:
-
-```bash
-CPYTHON_CATALYST_FRAMEWORK_PATH=/abs/path/to/Python.framework \
-REQUIRE_CATALYST=1 \
-scripts/build_cpython_xcframework.sh
+SELF_CONTAINED=0 scripts/build_cpython_xcframework.sh
 ```
 
 ## Publish Step
 
 Use [publish_cpython_release_asset.sh](../scripts/publish_cpython_release_asset.sh)
-to build the SwiftPM artifact and upload it to a GitHub release:
+to build and upload the SwiftPM artifact:
 
 ```bash
 GH_REPO=velos/Bash.swift \
-RELEASE_TAG=cpython-3.13-b13 \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-r3 \
 BEEWARE_TAG=3.13-b13 \
-BUILD_CATALYST=1 \
 scripts/publish_cpython_release_asset.sh
 ```
 
 The publish script:
 
-- runs `build_cpython_xcframework.sh`
-- writes `CPython.xcframework.checksum.txt` and `CPython.artifact-metadata.json`
+- runs the self-contained artifact builder
+- writes `CPython.xcframework.checksum.txt` and
+  `CPython.artifact-metadata.json`
 - creates the target GitHub release tag if it does not already exist
 - uploads `CPython.xcframework.zip` plus checksum/metadata assets
 - prints the exact `Package.swift` `binaryTarget` snippet to use
 
-The script expects GitHub CLI auth via `GH_TOKEN`/`GITHUB_TOKEN`.
+The script expects GitHub CLI auth via `GH_TOKEN` or `GITHUB_TOKEN`.
 
-For maintainers who prefer a manual UI entry point, this repo also includes
-[`publish-cpython-artifact.yml`](../.github/workflows/publish-cpython-artifact.yml),
-which exposes a `workflow_dispatch` action with `beeware_tag`, optional
-`release_tag`, and an `include_catalyst` toggle.
+For CI, use the manual
+[`publish-cpython-artifact.yml`](../.github/workflows/publish-cpython-artifact.yml)
+workflow. It installs Python 3.13 as the CPython build host, runs the same
+publisher, and uploads the generated zip/checksum/metadata as a workflow
+artifact. Dispatch it with `dry_run=true` first to exercise the full build
+without creating or updating a GitHub release. After that passes, dispatch it
+again with `dry_run=false` to publish the release asset.
 
-## Important Constraints
+## Runtime Initialization
 
-Producing a broader `CPython.xcframework` is only one part of iOS/Catalyst
-support.
+`CPythonRuntime` locates the embedded `org.python.python` framework bundle and
+uses its bundled Python home when initializing CPython. For debugging a custom
+runtime, set `BASHSWIFT_PYTHONHOME` to a directory containing
+`lib/python3.13`.
 
-The official iOS packaging flow also requires:
+The shell integration still owns BashPython's security model:
 
-- copying Python runtime files into the app bundle
-- setting `PYTHONHOME`
-- setting `PYTHONPATH`
-- post-processing binary modules for App Store compliant framework layout
+- file access routes through the configured shell `FileSystem`
+- socket attempts route through the shell network policy/callback path
+- `subprocess`, `ctypes`, and `os.system` remain blocked by strict shims
 
-That means Bash.swift should not enable iOS or Mac Catalyst runtime support
-until the app-bundle packaging story is implemented as well.
+## Validation
 
-## Follow-up Work
+Recommended checks after publishing a new artifact:
 
-To actually turn on runtime support beyond macOS, the package still needs:
+```bash
+HOST_PYTHON=python3.13 \
+GH_REPO=velos/Bash.swift \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-r3-local \
+BEEWARE_TAG=3.13-b13 \
+DRY_RUN=1 \
+scripts/publish_cpython_release_asset.sh
 
-1. A packaging decision for SwiftPM linkage beyond macOS. SwiftPM can gate on
-   `.iOS`, but not specifically on Mac Catalyst, so widening the manifest would
-   also pull CPython into plain iOS builds before the runtime bundle story is
-   ready.
-2. A resource/install story for mobile and Catalyst builds so the Python
-   standard library is available at runtime.
+swift test --filter BashPythonTests
+swift build --target BashPython \
+  --triple arm64-apple-ios16.0-simulator \
+  --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)"
+swift build --target BashPython \
+  --triple arm64-apple-tvos16.0-simulator \
+  --sdk "$(xcrun --sdk appletvsimulator --show-sdk-path)"
+swift build --target BashPython \
+  --triple arm64-apple-watchos9.0-simulator \
+  --sdk "$(xcrun --sdk watchsimulator --show-sdk-path)"
+```
+
+Also validate an iOS simulator host app that imports `BashPython` from SwiftPM
+and runs `python3 --version`, `python3 -c`, stdlib imports, filesystem interop,
+strict escape blocking, and network policy checks.

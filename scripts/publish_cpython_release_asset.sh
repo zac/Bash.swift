@@ -26,12 +26,7 @@ CHECKSUM_ASSET_NAME="${CHECKSUM_ASSET_NAME:-CPython.xcframework.checksum.txt}"
 METADATA_ASSET_NAME="${METADATA_ASSET_NAME:-CPython.artifact-metadata.json}"
 DRY_RUN="${DRY_RUN:-0}"
 OVERWRITE_ASSETS="${OVERWRITE_ASSETS:-1}"
-BUILD_CATALYST="${BUILD_CATALYST:-0}"
-INCLUDES_CATALYST=0
-
-if [[ "$BUILD_CATALYST" == "1" || -n "${CPYTHON_CATALYST_FRAMEWORK_PATH:-}" ]]; then
-  INCLUDES_CATALYST=1
-fi
+INCLUDES_CATALYST=1
 
 if [[ -z "$GH_REPO" ]]; then
   echo "error: GH_REPO or GITHUB_REPOSITORY must be set" >&2
@@ -48,8 +43,6 @@ mkdir -p "$BUILD_DIR"
 echo "Building CPython artifact from BeeWare tag ${EFFECTIVE_BEEWARE_TAG}"
 BEEWARE_TAG="$EFFECTIVE_BEEWARE_TAG" \
   BUILD_DIR="$BUILD_DIR" \
-  BUILD_CATALYST="$BUILD_CATALYST" \
-  CPYTHON_CATALYST_FRAMEWORK_PATH="${CPYTHON_CATALYST_FRAMEWORK_PATH:-}" \
   "$BUILD_SCRIPT"
 
 ZIP_PATH="$BUILD_DIR/$ASSET_NAME"
@@ -70,6 +63,7 @@ cat >"$METADATA_PATH" <<EOF
   "beeware_tag": "${EFFECTIVE_BEEWARE_TAG}",
   "checksum": "${CHECKSUM}",
   "includes_catalyst": ${INCLUDES_CATALYST},
+  "self_contained": true,
   "release_tag": "${RELEASE_TAG}",
   "source_release_url": "https://github.com/beeware/Python-Apple-support/releases/tag/${EFFECTIVE_BEEWARE_TAG}",
   "published_at_utc": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
@@ -88,7 +82,7 @@ else
     gh release create "$RELEASE_TAG" \
       --repo "$GH_REPO" \
       --title "$RELEASE_TITLE" \
-      --notes "CPython.xcframework artifact built from BeeWare Python-Apple-support ${EFFECTIVE_BEEWARE_TAG}."
+      --notes "Self-contained CPython.xcframework artifact built from BeeWare Python-Apple-support metadata ${EFFECTIVE_BEEWARE_TAG}."
   fi
 
   upload_args=(
@@ -113,6 +107,7 @@ Published artifact summary:
   Release:   ${RELEASE_TAG}
   BeeWare:   ${EFFECTIVE_BEEWARE_TAG}
   Catalyst:  ${INCLUDES_CATALYST}
+  Layout:    self-contained framework resources
   Artifact:  ${ZIP_PATH}
   Checksum:  ${CHECKSUM}
 
@@ -131,6 +126,7 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
 - Release: \`${RELEASE_TAG}\`
 - BeeWare tag: \`${EFFECTIVE_BEEWARE_TAG}\`
 - Includes Catalyst: \`${INCLUDES_CATALYST}\`
+- Self-contained: \`true\`
 - Artifact URL: \`${PACKAGE_URL}\`
 - Checksum: \`${CHECKSUM}\`
 EOF

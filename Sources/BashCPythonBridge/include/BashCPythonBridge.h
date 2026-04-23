@@ -15,6 +15,11 @@ typedef struct BashCPythonRuntime BashCPythonRuntime;
 int bash_cpython_is_available(void);
 
 BashCPythonRuntime *bash_cpython_runtime_create(const char *bootstrap_script, char **error_out);
+BashCPythonRuntime *bash_cpython_runtime_create_with_home(
+    const char *bootstrap_script,
+    const char *python_home,
+    char **error_out
+);
 void bash_cpython_runtime_destroy(BashCPythonRuntime *runtime);
 
 void bash_cpython_runtime_set_fs_handler(

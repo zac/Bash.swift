@@ -6,6 +6,7 @@ let package = Package(
     name: "Bash",
     platforms: [
         .macOS(.v13),
+        .macCatalyst(.v16),
         .iOS(.v16),
         .tvOS(.v16),
         .watchOS(.v9),
@@ -35,8 +36,8 @@ let package = Package(
         ),
         .binaryTarget(
             name: "CPython",
-            url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13/CPython.xcframework.zip",
-            checksum: "5afb0b07be17ec17b3fa075fcd87294f567c7de1e1df08926239f61277c2d8db"
+            url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13-selfcontained-r3/CPython.xcframework.zip",
+            checksum: "2e62f9674ed4b901826bef6998eff99b2a65315929582eb49fad1d16e600250f"
         ),
         .target(
             name: "BashCore",
@@ -71,12 +72,12 @@ let package = Package(
             dependencies: [
                 .target(
                     name: "CPython",
-                    condition: .when(platforms: [.macOS])
+                    condition: .when(platforms: [.macOS, .macCatalyst, .iOS])
                 ),
             ],
             publicHeadersPath: "include",
             linkerSettings: [
-                .linkedFramework("Python", .when(platforms: [.macOS])),
+                .linkedFramework("Python", .when(platforms: [.macOS, .macCatalyst, .iOS])),
             ]
         ),
         .target(
