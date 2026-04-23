@@ -1,6 +1,6 @@
 # Bash.swift
 
-`Bash.swift` is an in-process, stateful shell for Swift apps. It is inspired by [just-bash](https://github.com/vercel-labs/just-bash). Commands runs inside Swift instead of spawning host shell processes.
+`Bash.swift` is an in-process, stateful shell for Swift apps. It is inspired by [just-bash](https://github.com/vercel-labs/just-bash). Commands run inside Swift instead of spawning host shell processes.
 
 You create a `BashSession`, run shell command strings, and get structured `stdout`, `stderr`, and `exitCode` results back. Session state persists across runs, including the working directory, environment, history, and registered built-ins.
 
@@ -69,6 +69,12 @@ Notes:
 - `Bash` reexports the Workspace filesystem types, `BashCore`, `BashTools`, and any trait-enabled feature APIs, so downstream code only needs `import Bash`.
 - The `Python` trait uses a prebuilt `CPython.xcframework` binary target.
 - The `Git` trait uses a prebuilt `Clibgit2.xcframework` binary target.
+
+### Example app
+
+The repo includes [`Example/BashExample.xcodeproj`](Example/BashExample.xcodeproj), a small SwiftUI demo wired to the local `Bash` package.
+
+The project ships with automatic signing, no development team, and a placeholder bundle identifier (`com.example.BashExample`). Open the **BashExample** target → **Signing & Capabilities** and pick your own **Team** before running on a device. The simulator runs as-is. Treat any signing or bundle ID changes as local-only — they do not need to be committed.
 
 Supported package platforms:
 - macOS 13+
@@ -303,3 +309,25 @@ swift test --traits Git,Python,SQLite,Secrets
 ```
 
 The repository includes parser, filesystem, integration, command coverage, and trait-gated feature tests.
+
+## Acknowledgments
+
+### Inspiration
+
+The overall shape of `Bash.swift` — a stateful, in-process shell that app and agent code can drive directly — is inspired by [vercel-labs/just-bash](https://github.com/vercel-labs/just-bash). The parser, runtime, built-ins, and trait system are implemented from scratch in Swift, but the idea of "a real enough shell, inside your process" is theirs.
+
+### Python trait
+
+Apple-target **CPython** packaging and build metadata build on [BeeWare's Python-Apple-support](https://github.com/beeware/Python-Apple-support) and the related release artifacts. See [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md) for how `Bash.swift` consumes that stack.
+
+Python is © the [Python Software Foundation](https://www.python.org/psf-landing/); CPython is used under the [PSF license](https://docs.python.org/3/license.html).
+
+### Git trait
+
+The `Git` trait links a prebuilt `Clibgit2.xcframework` from [flaboy/static-libgit2](https://github.com/flaboy/static-libgit2), which packages [libgit2](https://github.com/libgit2/libgit2).
+
+libgit2 is distributed under [GPL v2 with a linking exception](https://github.com/libgit2/libgit2/blob/main/COPYING) (not MIT). The linking exception is what allows shipping libgit2 inside otherwise permissively licensed apps without the GPL propagating to your code. If you redistribute that binary, keep libgit2's license and notice requirements in mind for your product (for example in app legal notices).
+
+### Workspace
+
+`Bash.swift` sits on top of the [velos/Workspace](https://github.com/velos/Workspace) package for its filesystem and workspace tooling. The `ReadWriteFilesystem`, `InMemoryFilesystem`, `OverlayFilesystem`, `MountableFilesystem`, `SandboxFilesystem`, and `SecurityScopedFilesystem` types listed above are all provided by `Workspace` and reexported from `Bash`.
