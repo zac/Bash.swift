@@ -176,12 +176,30 @@ let workspace = Workspace(filesystem: filesystem)
 let tree = try await workspace.summarizeTree("/workspace", maxDepth: 2)
 ```
 
+`BashSession` exposes the same workspace abstraction. When you initialize a session with a
+filesystem, the session creates `Workspace(filesystem:)` over that filesystem. When you initialize
+with an existing `Workspace`, the shell uses `workspace.filesystem`, which lets multiple sessions
+share filesystem state.
+
+```swift
+let filesystem = InMemoryFilesystem()
+let first = try await BashSession(
+    options: SessionOptions(filesystem: filesystem, layout: .rootOnly)
+)
+
+let shared = first.workspace
+let second = try await BashSession(
+    options: SessionOptions(workspace: shared, layout: .rootOnly)
+)
+```
+
 ## API Summary
 
 Primary entry point:
 
 ```swift
 public final actor BashSession {
+    public nonisolated let workspace: Workspace
     public init(rootDirectory: URL, options: SessionOptions = .init()) async throws
     public init(options: SessionOptions = .init()) async throws
     public func run(_ commandLine: String, stdin: Data = Data()) async -> CommandResult
@@ -196,7 +214,7 @@ High-level types:
 - `CommandResult`: `stdout`, `stderr`, `exitCode`, plus string helpers
 - `RunOptions`: per-run `stdin`, environment overrides, temporary `cwd`, execution limits, and cancellation probe
 - `ExecutionLimits`: caps command count, function depth, loop iterations, command substitution depth, and optional wall-clock duration
-- `SessionOptions`: filesystem, layout, initial environment, globbing, history length, network policy, execution limits, permission callback, and secret policy
+- `SessionOptions`: filesystem or workspace, layout, initial environment, globbing, history length, network policy, execution limits, permission callback, and secret policy
 - `ShellPermissionRequest` / `ShellPermissionDecision`: shell-facing permission callback types
 - `ShellNetworkPolicy`: built-in outbound network policy
 
@@ -250,6 +268,19 @@ Rootless session example:
 let options = SessionOptions(filesystem: InMemoryFilesystem(), layout: .unixLike)
 let session = try await BashSession(options: options)
 ```
+
+Workspace-backed session example:
+
+```swift
+let workspace = Workspace(filesystem: InMemoryFilesystem())
+let session = try await BashSession(
+    options: SessionOptions(workspace: workspace, layout: .rootOnly)
+)
+```
+
+Shell commands mutate the shared filesystem directly. The exposed workspace can read, summarize,
+snapshot, and checkpoint those shell changes, but shell operations are not recorded as Workspace
+mutation events.
 
 ## Shell Scope
 

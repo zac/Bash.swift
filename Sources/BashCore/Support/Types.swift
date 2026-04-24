@@ -140,7 +140,31 @@ public struct DefaultSecretOutputRedactor: SecretOutputRedacting {
 }
 
 public struct SessionOptions: Sendable {
-    public var filesystem: any FileSystem
+    private var filesystemStore: any FileSystem
+    private var workspaceStore: Workspace?
+
+    public var filesystem: any FileSystem {
+        get {
+            workspaceStore?.filesystem ?? filesystemStore
+        }
+        set {
+            filesystemStore = newValue
+            workspaceStore = nil
+        }
+    }
+
+    public var workspace: Workspace? {
+        get {
+            workspaceStore
+        }
+        set {
+            workspaceStore = newValue
+            if let newValue {
+                filesystemStore = newValue.filesystem
+            }
+        }
+    }
+
     public var layout: SessionLayout
     public var initialEnvironment: [String: String]
     public var enableGlobbing: Bool
@@ -165,7 +189,35 @@ public struct SessionOptions: Sendable {
         secretResolver: (any SecretReferenceResolving)? = nil,
         secretOutputRedactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()
     ) {
-        self.filesystem = filesystem
+        self.filesystemStore = filesystem
+        self.workspaceStore = nil
+        self.layout = layout
+        self.initialEnvironment = initialEnvironment
+        self.enableGlobbing = enableGlobbing
+        self.maxHistory = maxHistory
+        self.networkPolicy = networkPolicy
+        self.executionLimits = executionLimits
+        self.permissionHandler = permissionHandler
+        self.secretPolicy = secretPolicy
+        self.secretResolver = secretResolver
+        self.secretOutputRedactor = secretOutputRedactor
+    }
+
+    public init(
+        workspace: Workspace,
+        layout: SessionLayout = .unixLike,
+        initialEnvironment: [String: String] = [:],
+        enableGlobbing: Bool = true,
+        maxHistory: Int = 1_000,
+        networkPolicy: ShellNetworkPolicy = .disabled,
+        executionLimits: ExecutionLimits = .default,
+        permissionHandler: (@Sendable (ShellPermissionRequest) async -> ShellPermissionDecision)? = nil,
+        secretPolicy: SecretHandlingPolicy = .off,
+        secretResolver: (any SecretReferenceResolving)? = nil,
+        secretOutputRedactor: any SecretOutputRedacting = DefaultSecretOutputRedactor()
+    ) {
+        self.filesystemStore = workspace.filesystem
+        self.workspaceStore = workspace
         self.layout = layout
         self.initialEnvironment = initialEnvironment
         self.enableGlobbing = enableGlobbing
