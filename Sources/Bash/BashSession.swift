@@ -3,6 +3,7 @@ import BashCore
 
 public final actor BashSession {
     let filesystemStore: any FileSystem
+    public nonisolated let workspace: Workspace
     private let options: SessionOptions
     let jobManager: ShellJobManager
     private let permissionAuthorizer: ShellPermissionAuthorizer
@@ -28,12 +29,14 @@ public final actor BashSession {
     public init(rootDirectory: URL, options: SessionOptions = .init()) async throws {
         let filesystem = options.filesystem
         try await filesystem.configure(rootDirectory: rootDirectory)
-        try await self.init(options: options, configuredFilesystem: filesystem)
+        let workspace = options.workspace ?? Workspace(filesystem: filesystem)
+        try await self.init(options: options, configuredFilesystem: filesystem, workspace: workspace)
     }
 
     public init(options: SessionOptions = .init()) async throws {
         let filesystem = options.filesystem
-        try await self.init(options: options, configuredFilesystem: filesystem)
+        let workspace = options.workspace ?? Workspace(filesystem: filesystem)
+        try await self.init(options: options, configuredFilesystem: filesystem, workspace: workspace)
     }
 
     public func run(_ commandLine: String, stdin: Data = Data()) async -> CommandResult {
@@ -355,9 +358,10 @@ public final actor BashSession {
         }
     }
 
-    private init(options: SessionOptions, configuredFilesystem: any FileSystem) async throws {
+    private init(options: SessionOptions, configuredFilesystem: any FileSystem, workspace: Workspace) async throws {
         self.options = options
         filesystemStore = configuredFilesystem
+        self.workspace = workspace
         jobManager = ShellJobManager()
         permissionAuthorizer = ShellPermissionAuthorizer(
             networkPolicy: options.networkPolicy,

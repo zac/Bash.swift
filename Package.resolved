@@ -1,5 +1,5 @@
 {
-  "originHash" : "67d3a10de52cc088d55e494edf0ac4061befdc4fd1cbd416594819f8a140a7b7",
+  "originHash" : "9b69a1d57dd785055ef3357061508c96edc3cb4e6828a7921b75539f77957bb7",
   "pins" : [
     {
       "identity" : "swift-argument-parser",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/velos/Workspace.git",
       "state" : {
-        "revision" : "f68074337d57acdf1b2b52ed457c15dc68184e24",
-        "version" : "0.2.0"
+        "branch" : "workspace-filesystem-helper",
+        "revision" : "0e0cdf4f6709e94284c275c2515e1899fee4d331"
       }
     },
     {

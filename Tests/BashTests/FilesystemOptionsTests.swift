@@ -24,6 +24,99 @@ struct FilesystemOptionsTests {
         #expect(ls.stdoutString.contains("rootless.txt"))
     }
 
+    @Test("filesystem-backed session exposes workspace sharing filesystem")
+    func filesystemBackedSessionExposesWorkspaceSharingFilesystem() async throws {
+        let session = try await BashSession(
+            options: SessionOptions(
+                filesystem: InMemoryFilesystem(),
+                layout: .rootOnly
+            )
+        )
+
+        let write = await session.run("printf hello > /note.txt")
+        #expect(write.exitCode == 0)
+
+        let content = try await session.workspace.readFile("/note.txt")
+        #expect(content == "hello")
+    }
+
+    @Test("workspace-backed sessions share workspace filesystem")
+    func workspaceBackedSessionsShareWorkspaceFilesystem() async throws {
+        let workspace = Workspace(filesystem: InMemoryFilesystem())
+        let first = try await BashSession(
+            options: SessionOptions(workspace: workspace, layout: .rootOnly)
+        )
+        let second = try await BashSession(
+            options: SessionOptions(workspace: workspace, layout: .rootOnly)
+        )
+
+        #expect(first.workspace.workspaceId == workspace.workspaceId)
+        #expect(second.workspace.workspaceId == workspace.workspaceId)
+
+        let write = await first.run("printf shared > /shared.txt")
+        #expect(write.exitCode == 0)
+
+        let read = await second.run("cat /shared.txt")
+        #expect(read.exitCode == 0)
+        #expect(read.stdoutString == "shared")
+
+        let content = try await workspace.readFile("/shared.txt")
+        #expect(content == "shared")
+    }
+
+    @Test("root directory configures workspace-backed read-write filesystem")
+    func rootDirectoryConfiguresWorkspaceBackedReadWriteFilesystem() async throws {
+        let root = try TestSupport.makeTempDirectory(prefix: "BashWorkspaceBacked")
+        defer { TestSupport.removeDirectory(root) }
+
+        let workspace = Workspace(filesystem: ReadWriteFilesystem())
+        let session = try await BashSession(
+            rootDirectory: root,
+            options: SessionOptions(workspace: workspace, layout: .rootOnly)
+        )
+
+        #expect(session.workspace.workspaceId == workspace.workspaceId)
+
+        let write = await session.run("printf disk > /disk.txt")
+        #expect(write.exitCode == 0)
+
+        let workspaceContent = try await workspace.readFile("/disk.txt")
+        #expect(workspaceContent == "disk")
+
+        let diskContent = try String(
+            contentsOf: root.appendingPathComponent("disk.txt"),
+            encoding: .utf8
+        )
+        #expect(diskContent == "disk")
+    }
+
+    @Test("session options workspace and filesystem setters switch authoritative source")
+    func sessionOptionsWorkspaceAndFilesystemSettersSwitchAuthoritativeSource() async throws {
+        let workspaceFilesystem = InMemoryFilesystem()
+        let workspace = Workspace(filesystem: workspaceFilesystem)
+        let replacementFilesystem = InMemoryFilesystem()
+        var options = SessionOptions(filesystem: InMemoryFilesystem(), layout: .rootOnly)
+
+        options.workspace = workspace
+        #expect(options.workspace?.workspaceId == workspace.workspaceId)
+        try await options.filesystem.writeFile(
+            path: WorkspacePath(normalizing: "/workspace-option.txt"),
+            data: Data("workspace".utf8),
+            append: false
+        )
+        #expect(await workspaceFilesystem.exists(path: WorkspacePath(normalizing: "/workspace-option.txt")))
+
+        options.filesystem = replacementFilesystem
+        #expect(options.workspace == nil)
+        try await options.filesystem.writeFile(
+            path: WorkspacePath(normalizing: "/replacement-option.txt"),
+            data: Data("replacement".utf8),
+            append: false
+        )
+        #expect(await replacementFilesystem.exists(path: WorkspacePath(normalizing: "/replacement-option.txt")))
+        #expect(!(await workspaceFilesystem.exists(path: WorkspacePath(normalizing: "/replacement-option.txt"))))
+    }
+
     @Test("bash reexports native workspace filesystem types")
     func bashReexportsNativeWorkspaceFilesystemTypes() async throws {
         let workspaceFilesystem: any FileSystem = InMemoryFilesystem()

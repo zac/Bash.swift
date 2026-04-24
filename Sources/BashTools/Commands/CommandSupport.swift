@@ -148,6 +148,10 @@ enum CommandError {
             return shellError.description
         }
 
+        if let workspaceError = error as? WorkspaceError {
+            return workspaceError.description
+        }
+
         return error.localizedDescription
     }
 }

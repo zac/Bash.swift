@@ -24,7 +24,7 @@ let package = Package(
         "Secrets",
     ],
     dependencies: [
-        .package(url: "https://github.com/velos/Workspace.git", from: "0.2.0"),
+        .package(url: "https://github.com/velos/Workspace.git", branch: "workspace-filesystem-helper"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         .package(url: "https://github.com/jpsim/Yams", from: "5.1.3"),
     ],
