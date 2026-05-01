@@ -1,6 +1,15 @@
 {
-  "originHash" : "9b69a1d57dd785055ef3357061508c96edc3cb4e6828a7921b75539f77957bb7",
+  "originHash" : "aa7c72a32927870f9a7702cfd04ab1257e820dfb46f167284d5d46a6a46e8cf3",
   "pins" : [
+    {
+      "identity" : "libgit2",
+      "kind" : "remoteSourceControl",
+      "location" : "https://github.com/ibrahimcetin/libgit2.git",
+      "state" : {
+        "revision" : "52287b0914f300f916b58fec80e13d8dd8f6824f",
+        "version" : "1.9.2"
+      }
+    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
@@ -15,8 +24,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/velos/Workspace.git",
       "state" : {
-        "branch" : "workspace-filesystem-helper",
-        "revision" : "0e0cdf4f6709e94284c275c2515e1899fee4d331"
+        "branch" : "main",
+        "revision" : "5aa50759aef60de3e4ee0cdf6e09697470232a0e"
       }
     },
     {

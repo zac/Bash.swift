@@ -68,7 +68,7 @@ Notes:
 - `Bash.swift` depends on the [`Workspace`](https://github.com/velos/Workspace) package for the reusable filesystem layer.
 - `Bash` reexports the Workspace filesystem types, `BashCore`, `BashTools`, and any trait-enabled feature APIs, so downstream code only needs `import Bash`.
 - The `Python` trait uses a prebuilt `CPython.xcframework` binary target.
-- The `Git` trait uses a prebuilt `Clibgit2.xcframework` binary target.
+- The `Git` trait uses a SwiftPM-packaged libgit2 build.
 
 ### Example app
 
@@ -355,7 +355,7 @@ Python is © the [Python Software Foundation](https://www.python.org/psf-landing
 
 ### Git trait
 
-The `Git` trait links a prebuilt `Clibgit2.xcframework` from [flaboy/static-libgit2](https://github.com/flaboy/static-libgit2), which packages [libgit2](https://github.com/libgit2/libgit2).
+The `Git` trait links [ibrahimcetin/libgit2](https://github.com/ibrahimcetin/libgit2) at `1.9.2`, a SwiftPM-packaged build of [libgit2](https://github.com/libgit2/libgit2).
 
 libgit2 is distributed under [GPL v2 with a linking exception](https://github.com/libgit2/libgit2/blob/main/COPYING) (not MIT). The linking exception is what allows shipping libgit2 inside otherwise permissively licensed apps without the GPL propagating to your code. If you redistribute that binary, keep libgit2's license and notice requirements in mind for your product (for example in app legal notices).
 

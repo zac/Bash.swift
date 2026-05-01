@@ -25,15 +25,11 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/velos/Workspace.git", branch: "main"),
+        .package(url: "https://github.com/ibrahimcetin/libgit2.git", exact: "1.9.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         .package(url: "https://github.com/jpsim/Yams", from: "5.1.3"),
     ],
     targets: [
-        .binaryTarget(
-            name: "Clibgit2",
-            url: "https://github.com/flaboy/static-libgit2/releases/download/1.8.5/Clibgit2.xcframework.zip",
-            checksum: "f62a6760f8c2ff1a82e4fb80c69fe2aa068458c7619f5b98c53c71579f72f9c7"
-        ),
         .binaryTarget(
             name: "CPython",
             url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13-selfcontained-r3/CPython.xcframework.zip",
@@ -50,13 +46,10 @@ let package = Package(
             name: "BashGitFeature",
             dependencies: [
                 "BashCore",
-                "Clibgit2",
+                .product(name: "libgit2", package: "libgit2"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
-            path: "Sources/BashGit",
-            linkerSettings: [
-                .linkedLibrary("iconv")
-            ]
+            path: "Sources/BashGit"
         ),
         .target(
             name: "BashPythonFeature",
