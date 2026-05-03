@@ -25,11 +25,15 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/velos/Workspace.git", branch: "main"),
-        .package(url: "https://github.com/ibrahimcetin/libgit2.git", exact: "1.9.2"),
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.3.0"),
         .package(url: "https://github.com/jpsim/Yams", from: "5.1.3"),
     ],
     targets: [
+        .binaryTarget(
+            name: "Clibgit2",
+            url: "https://github.com/velos/Bash.swift/releases/download/libgit2-1.9.2-r2/Clibgit2.xcframework.zip",
+            checksum: "3df74df309b264830d8dc0f75c4647da84f0f9afdec5290bf04027b0f6463e0a"
+        ),
         .binaryTarget(
             name: "CPython",
             url: "https://github.com/velos/Bash.swift/releases/download/cpython-3.13-b13-selfcontained-r3/CPython.xcframework.zip",
@@ -46,10 +50,15 @@ let package = Package(
             name: "BashGitFeature",
             dependencies: [
                 "BashCore",
-                .product(name: "libgit2", package: "libgit2"),
+                .target(name: "Clibgit2", condition: .when(platforms: [.macOS, .macCatalyst, .iOS])),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
-            path: "Sources/BashGit"
+            path: "Sources/BashGit",
+            linkerSettings: [
+                .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .macCatalyst, .iOS])),
+                .linkedFramework("Security", .when(platforms: [.macOS, .macCatalyst, .iOS])),
+                .linkedLibrary("iconv", .when(platforms: [.macOS, .macCatalyst, .iOS])),
+            ]
         ),
         .target(
             name: "BashPythonFeature",

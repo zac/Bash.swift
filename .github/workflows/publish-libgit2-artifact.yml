@@ -1,0 +1,63 @@
+name: Publish libgit2 Artifact
+
+on:
+  workflow_dispatch:
+    inputs:
+      libgit2_tag:
+        description: "Upstream libgit2 tag, for example v1.9.2"
+        required: true
+        default: "v1.9.2"
+      release_tag:
+        description: "GitHub release tag to create/update. Defaults to libgit2-<version>-r2 when empty."
+        required: false
+        default: ""
+      dry_run:
+        description: "Build and upload a workflow artifact without creating/updating a GitHub release."
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Print tool versions
+        run: |
+          xcodebuild -version
+          swift --version
+          cmake --version
+
+      - name: Publish libgit2 release asset
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          LIBGIT2_TAG: ${{ inputs.libgit2_tag }}
+          RELEASE_TAG: ${{ inputs.release_tag }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+        run: |
+          if [[ -z "$RELEASE_TAG" ]]; then
+            LIBGIT2_VERSION="${LIBGIT2_TAG#v}"
+            export RELEASE_TAG="libgit2-${LIBGIT2_VERSION}-r2"
+          fi
+
+          scripts/publish_libgit2_release_asset.sh
+
+      - name: Upload libgit2 workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: clibgit2-xcframework-${{ inputs.libgit2_tag }}
+          path: |
+            build/libgit2/Clibgit2.xcframework.zip
+            build/libgit2/Clibgit2.xcframework.checksum.txt
+            build/libgit2/Clibgit2.artifact-metadata.json
+          if-no-files-found: error
+          retention-days: 7

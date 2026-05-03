@@ -1,15 +1,6 @@
 {
-  "originHash" : "aa7c72a32927870f9a7702cfd04ab1257e820dfb46f167284d5d46a6a46e8cf3",
+  "originHash" : "386e5d9911d21196875ad6ea96bf10e09dd82acd7b54fcdbd86ab506da950695",
   "pins" : [
-    {
-      "identity" : "libgit2",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/ibrahimcetin/libgit2.git",
-      "state" : {
-        "revision" : "52287b0914f300f916b58fec80e13d8dd8f6824f",
-        "version" : "1.9.2"
-      }
-    },
     {
       "identity" : "swift-argument-parser",
       "kind" : "remoteSourceControl",
