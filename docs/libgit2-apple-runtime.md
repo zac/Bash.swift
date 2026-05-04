@@ -69,13 +69,28 @@ The publish script:
 - runs the artifact builder
 - writes `Clibgit2.xcframework.checksum.txt` and
   `Clibgit2.artifact-metadata.json`
+- writes `Clibgit2.third-party-notices.txt`
+- copies the exact upstream source archive as
+  `libgit2-<tag>-source.tar.gz`
 - creates the target GitHub release tag if it does not already exist
-- uploads `Clibgit2.xcframework.zip` plus checksum/metadata assets
+- uploads `Clibgit2.xcframework.zip` plus checksum, metadata, source, and
+  notice assets
 - prints the exact `Package.swift` `binaryTarget` snippet to use
 
 The script expects GitHub CLI auth via `GH_TOKEN` or `GITHUB_TOKEN`.
 For local iteration, set `SKIP_BUILD=1` to publish or dry-run against an
 existing `build/libgit2/Clibgit2.xcframework.zip`.
+
+To add or refresh only the source and notice assets for an existing release,
+without touching the SwiftPM binary zip:
+
+```bash
+GH_REPO=velos/Bash.swift \
+RELEASE_TAG=libgit2-1.9.2-r2 \
+LIBGIT2_TAG=v1.9.2 \
+COMPLIANCE_ONLY=1 \
+scripts/publish_libgit2_release_asset.sh
+```
 
 For CI, use the manual
 [`publish-libgit2-artifact.yml`](../.github/workflows/publish-libgit2-artifact.yml)
@@ -101,6 +116,8 @@ swift test --traits Git --filter BashGitTests
 
 ## License
 
-libgit2 is distributed under GPL v2 with a linking exception. Keep libgit2's
-license and notice requirements in downstream app legal notices when
+libgit2 is distributed under GPL v2 with a linking exception. The release
+assets include the upstream source archive and a third-party notices file for
+libgit2 and the bundled dependency code compiled into the static library. Keep
+those license and notice requirements in downstream app legal notices when
 redistributing the artifact.

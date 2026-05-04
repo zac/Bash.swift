@@ -64,5 +64,9 @@ jobs:
             build/cpython/CPython.xcframework.zip
             build/cpython/CPython.xcframework.checksum.txt
             build/cpython/CPython.artifact-metadata.json
+            build/cpython/CPython.third-party-notices.txt
+            build/cpython/Python-Apple-support-*.Makefile
+            build/cpython/sources/*.tgz
+            build/cpython/sources/*.tar.gz
           if-no-files-found: error
           retention-days: 7

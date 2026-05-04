@@ -352,12 +352,13 @@ The overall shape of `Bash.swift` — a stateful, in-process shell that app and 
 Apple-target **CPython** packaging and build metadata build on [BeeWare's Python-Apple-support](https://github.com/beeware/Python-Apple-support) and the related release artifacts. See [docs/cpython-apple-runtime.md](docs/cpython-apple-runtime.md) for how `Bash.swift` consumes that stack.
 
 Python is © the [Python Software Foundation](https://www.python.org/psf-landing/); CPython is used under the [PSF license](https://docs.python.org/3/license.html).
+The `CPython.xcframework` release also includes source and notice assets for CPython and the non-system native libraries used by the artifact build, including BZip2, mpdecimal, OpenSSL, and XZ/liblzma.
 
 ### Git trait
 
 The `Git` trait links a prebuilt `Clibgit2.xcframework` release artifact built from upstream [libgit2](https://github.com/libgit2/libgit2). Maintainer notes for the Apple artifact live in [docs/libgit2-apple-runtime.md](docs/libgit2-apple-runtime.md).
 
-libgit2 is distributed under [GPL v2 with a linking exception](https://github.com/libgit2/libgit2/blob/main/COPYING) (not MIT). The linking exception is what allows shipping libgit2 inside otherwise permissively licensed apps without the GPL propagating to your code. If you redistribute that binary, keep libgit2's license and notice requirements in mind for your product (for example in app legal notices).
+libgit2 is distributed under [GPL v2 with a linking exception](https://github.com/libgit2/libgit2/blob/main/COPYING) (not MIT). The linking exception is what allows shipping libgit2 inside otherwise permissively licensed apps without the GPL propagating to your code. The `Clibgit2.xcframework` release includes upstream source and notice assets; downstream products that redistribute the binary should keep those notices in their app legal attributions.
 
 ### Workspace
 

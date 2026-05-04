@@ -59,5 +59,7 @@ jobs:
             build/libgit2/Clibgit2.xcframework.zip
             build/libgit2/Clibgit2.xcframework.checksum.txt
             build/libgit2/Clibgit2.artifact-metadata.json
+            build/libgit2/Clibgit2.third-party-notices.txt
+            build/libgit2/libgit2-*-source.tar.gz
           if-no-files-found: error
           retention-days: 7
