@@ -31,8 +31,8 @@ let package = Package(
     targets: [
         .binaryTarget(
             name: "Clibgit2",
-            url: "https://github.com/flaboy/static-libgit2/releases/download/1.8.5/Clibgit2.xcframework.zip",
-            checksum: "f62a6760f8c2ff1a82e4fb80c69fe2aa068458c7619f5b98c53c71579f72f9c7"
+            url: "https://github.com/velos/Bash.swift/releases/download/libgit2-1.9.2-r2/Clibgit2.xcframework.zip",
+            checksum: "3df74df309b264830d8dc0f75c4647da84f0f9afdec5290bf04027b0f6463e0a"
         ),
         .binaryTarget(
             name: "CPython",
@@ -50,12 +50,14 @@ let package = Package(
             name: "BashGitFeature",
             dependencies: [
                 "BashCore",
-                "Clibgit2",
+                .target(name: "Clibgit2", condition: .when(platforms: [.macOS, .macCatalyst, .iOS])),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],
             path: "Sources/BashGit",
             linkerSettings: [
-                .linkedLibrary("iconv")
+                .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .macCatalyst, .iOS])),
+                .linkedFramework("Security", .when(platforms: [.macOS, .macCatalyst, .iOS])),
+                .linkedLibrary("iconv", .when(platforms: [.macOS, .macCatalyst, .iOS])),
             ]
         ),
         .target(

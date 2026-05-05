@@ -1,9 +1,7 @@
 import Foundation
 import BashCore
 
-#if canImport(CLibgit2)
-import CLibgit2
-#elseif canImport(Clibgit2)
+#if canImport(Clibgit2)
 import Clibgit2
 #endif
 
@@ -21,7 +19,7 @@ struct GitExecutionResult {
 
 enum GitEngine {
     static func run(arguments: [String], context: inout CommandContext) async -> GitExecutionResult {
-        #if canImport(CLibgit2) || canImport(Clibgit2)
+        #if canImport(Clibgit2)
         return await runWithLibgit2(arguments: arguments, context: &context)
         #else
         _ = arguments
@@ -34,7 +32,7 @@ enum GitEngine {
     }
 }
 
-#if canImport(CLibgit2) || canImport(Clibgit2)
+#if canImport(Clibgit2)
 private enum GitEngineError: Error {
     case usage(String)
     case runtime(String)

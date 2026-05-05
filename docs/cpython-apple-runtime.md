@@ -80,19 +80,38 @@ The publish script:
 - runs the self-contained artifact builder
 - writes `CPython.xcframework.checksum.txt` and
   `CPython.artifact-metadata.json`
+- writes `CPython.third-party-notices.txt`
+- downloads and uploads the CPython source archive plus source archives for
+  the non-system native dependencies used by the build script
+- uploads the BeeWare `Python-Apple-support` Makefile used as build metadata
 - creates the target GitHub release tag if it does not already exist
-- uploads `CPython.xcframework.zip` plus checksum/metadata assets
+- uploads `CPython.xcframework.zip` plus checksum, metadata, source, and
+  notice assets
 - prints the exact `Package.swift` `binaryTarget` snippet to use
 
 The script expects GitHub CLI auth via `GH_TOKEN` or `GITHUB_TOKEN`.
 
+To add or refresh only the source and notice assets for an existing release,
+without touching the SwiftPM binary zip, provide the already-published SwiftPM
+checksum:
+
+```bash
+GH_REPO=velos/Bash.swift \
+RELEASE_TAG=cpython-3.13-b13-selfcontained-r3 \
+BEEWARE_TAG=3.13-b13 \
+PACKAGE_CHECKSUM=2e62f9674ed4b901826bef6998eff99b2a65315929582eb49fad1d16e600250f \
+COMPLIANCE_ONLY=1 \
+scripts/publish_cpython_release_asset.sh
+```
+
 For CI, use the manual
 [`publish-cpython-artifact.yml`](../.github/workflows/publish-cpython-artifact.yml)
 workflow. It installs Python 3.13 as the CPython build host, runs the same
-publisher, and uploads the generated zip/checksum/metadata as a workflow
-artifact. Dispatch it with `dry_run=true` first to exercise the full build
-without creating or updating a GitHub release. After that passes, dispatch it
-again with `dry_run=false` to publish the release asset.
+publisher, and uploads the generated zip, checksum, metadata, source, and
+notice files as a workflow artifact. Dispatch it with `dry_run=true` first to
+exercise the full build without creating or updating a GitHub release. After
+that passes, dispatch it again with `dry_run=false` to publish the release
+asset.
 
 ## Runtime Initialization
 
@@ -134,3 +153,11 @@ swift build --target BashPython \
 Also validate an iOS simulator host app that imports `BashPython` from SwiftPM
 and runs `python3 --version`, `python3 -c`, stdlib imports, filesystem interop,
 strict escape blocking, and network policy checks.
+
+## License
+
+The CPython artifact redistributes CPython and statically links selected native
+dependencies into the iOS and Mac Catalyst slices. Release assets include a
+third-party notices file and source archives for CPython, BZip2, mpdecimal,
+OpenSSL, and XZ/liblzma. Downstream apps that redistribute the binary target
+should include those notices in their legal attributions.
