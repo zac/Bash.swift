@@ -31,6 +31,9 @@
   "core.text.cut_sort_uniq": [
     "cut -d ' ' -f 2 items.txt | sort | uniq > unique.txt"
   ],
+  "core.text.comm_common_lines": [
+    "comm -12 left.txt right.txt > common.txt"
+  ],
   "core.text.tr_uppercase": [
     "tr 'a-z' 'A-Z' < lower.txt > upper.txt"
   ],
@@ -46,6 +49,19 @@
   ],
   "core.shell.env_default_expansion": [
     "echo ${NEW_VAR:-default_value} > default.txt"
+  ],
+  "core.shell.env_assignment_prefix": [
+    "MODE=preview printenv MODE > scoped.txt",
+    "printenv MODE > after.txt || echo unset > after.txt"
+  ],
+  "core.shell.source_file_state": [
+    "source env.sh; pwd > sourced.txt; printenv SOURCED_VALUE >> sourced.txt"
+  ],
+  "core.shell.set_pipefail": [
+    "set -o pipefail; false | true || echo failed > pipefail.txt"
+  ],
+  "core.shell.exit_stops_sequence": [
+    "echo before > before.txt; exit 0; echo after > after.txt"
   ],
   "core.shell.glob_concat": [
     "cat logs/*.log > merged.txt"
@@ -71,6 +87,9 @@
   "core.hash.sha256sum_file": [
     "sha256sum input.txt | awk '{print $1}' > hash.txt"
   ],
+  "core.hash.shasum_sha1_file": [
+    "shasum input.txt | awk '{print $1}' > sha1.txt"
+  ],
   "core.data.jq_filter_projection": [
     "jq -r '.[] | select(.age >= 30) | .name' people.json | sort > names.txt"
   ],
@@ -82,6 +101,9 @@
   ],
   "core.utility.timeout_nonzero": [
     "timeout 1 sleep 3 || echo 124 > timeout_exit.txt"
+  ],
+  "core.utility.mktemp_file": [
+    "path=$(mktemp); echo \"$path\" > temp_path.txt; printf created > \"$path\""
   ],
   "probe.command.wget_present": [
     "wget --version | head -n 1 > wget.txt"

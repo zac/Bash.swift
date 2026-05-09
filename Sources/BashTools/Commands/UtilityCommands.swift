@@ -137,6 +137,220 @@ struct HistoryCommand: BuiltinCommand {
     }
 }
 
+struct SetCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Shell option flags")
+        var args: [String] = []
+    }
+
+    static let name = "set"
+    static let overview = "Set or unset shell options"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.args == ["--help"] || options.args == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Set or unset shell options
+
+                USAGE: set [-eux] [-o OPTION] [+eux] [+o OPTION]
+
+                OPTIONS:
+                  -o pipefail       Pipeline status is the rightmost non-zero command
+                  +o pipefail       Disable pipefail
+                  -e/+e             Track errexit compatibility state
+                  -u/+u             Track nounset compatibility state
+                  -x/+x             Track xtrace compatibility state
+
+                """
+            )
+            return 0
+        }
+
+        guard !options.args.isEmpty else {
+            for key in context.environment.keys.sorted() {
+                guard !key.hasPrefix("__BASHSWIFT_INTERNAL_"),
+                      !key.hasPrefix("__BASHSWIFT_SHELLOPT_") else {
+                    continue
+                }
+                context.writeStdout("\(key)=\(context.environment[key] ?? "")\n")
+            }
+            return 0
+        }
+
+        var index = 0
+        while index < options.args.count {
+            let token = options.args[index]
+            if token == "--" {
+                return 0
+            }
+
+            if token == "-o" || token == "+o" {
+                guard index + 1 < options.args.count else {
+                    context.writeStderr("set: option requires an argument -- o\n")
+                    return 2
+                }
+                guard applyNamedOption(options.args[index + 1], enabled: token == "-o", context: &context) else {
+                    return 2
+                }
+                index += 2
+                continue
+            }
+
+            if (token.hasPrefix("-") || token.hasPrefix("+")), token.count > 1 {
+                let enabled = token.hasPrefix("-")
+                var characters = Array(token.dropFirst())
+                while !characters.isEmpty {
+                    let flag = characters.removeFirst()
+                    switch flag {
+                    case "e":
+                        setOption(ShellOptionKeys.errexit, enabled: enabled, context: &context)
+                    case "u":
+                        setOption(ShellOptionKeys.nounset, enabled: enabled, context: &context)
+                    case "x":
+                        setOption(ShellOptionKeys.xtrace, enabled: enabled, context: &context)
+                    case "o":
+                        guard index + 1 < options.args.count else {
+                            context.writeStderr("set: option requires an argument -- o\n")
+                            return 2
+                        }
+                        guard applyNamedOption(options.args[index + 1], enabled: enabled, context: &context) else {
+                            return 2
+                        }
+                        index += 1
+                        characters.removeAll()
+                    default:
+                        context.writeStderr("set: invalid option -- \(flag)\n")
+                        return 2
+                    }
+                }
+                index += 1
+                continue
+            }
+
+            context.writeStderr("set: unsupported argument '\(token)'\n")
+            return 2
+        }
+
+        return 0
+    }
+
+    private static func applyNamedOption(
+        _ option: String,
+        enabled: Bool,
+        context: inout CommandContext
+    ) -> Bool {
+        switch option {
+        case "pipefail":
+            setOption(ShellOptionKeys.pipefail, enabled: enabled, context: &context)
+            return true
+        case "errexit":
+            setOption(ShellOptionKeys.errexit, enabled: enabled, context: &context)
+            return true
+        case "nounset":
+            setOption(ShellOptionKeys.nounset, enabled: enabled, context: &context)
+            return true
+        case "xtrace":
+            setOption(ShellOptionKeys.xtrace, enabled: enabled, context: &context)
+            return true
+        default:
+            context.writeStderr("set: \(option): invalid option name\n")
+            return false
+        }
+    }
+
+    private static func setOption(
+        _ key: String,
+        enabled: Bool,
+        context: inout CommandContext
+    ) {
+        if enabled {
+            context.environment[key] = "1"
+        } else {
+            context.environment.removeValue(forKey: key)
+        }
+    }
+}
+
+struct CommandCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Command invocation")
+        var args: [String] = []
+    }
+
+    static let name = "command"
+    static let overview = "Execute or query commands"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.args == ["--help"] || options.args == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Execute or query commands
+
+                USAGE: command [-v|-V] <command>
+                   or: command <command> [args...]
+
+                """
+            )
+            return 0
+        }
+
+        guard !options.args.isEmpty else {
+            return 0
+        }
+
+        if options.args.first == "-v" || options.args.first == "-V" {
+            let verbose = options.args.first == "-V"
+            let names = Array(options.args.dropFirst())
+            guard !names.isEmpty else {
+                context.writeStderr("command: option requires an argument -- \(verbose ? "V" : "v")\n")
+                return 2
+            }
+
+            var allFound = true
+            for name in names {
+                if context.commandRegistry[name] != nil {
+                    context.writeStdout(verbose ? "\(name) is a shell builtin\n" : "\(name)\n")
+                } else {
+                    allFound = false
+                }
+            }
+            return allFound ? 0 : 1
+        }
+
+        let result = await context.runSubcommand(options.args, stdin: context.stdin)
+        context.stdout.append(result.stdout)
+        context.stderr.append(result.stderr)
+        return result.exitCode
+    }
+}
+
+struct ExitCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(help: "Optional exit status")
+        var status: String?
+    }
+
+    static let name = "exit"
+    static let overview = "Exit the current shell run"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        let exitCode: Int32
+        if let status = options.status {
+            guard let parsed = Int32(status) else {
+                context.writeStderr("exit: \(status): numeric argument required\n")
+                context.environment[ShellInternalKeys.exitRequested] = "1"
+                return 2
+            }
+            exitCode = parsed
+        } else {
+            exitCode = 0
+        }
+
+        context.environment[ShellInternalKeys.exitRequested] = "1"
+        return exitCode
+    }
+}
+
 struct JobsCommand: BuiltinCommand {
     struct Options: ParsableArguments {}
 
@@ -857,6 +1071,87 @@ struct TimeoutCommand: BuiltinCommand {
             context.stderr.append(result.stderr)
             return result.exitCode
         }
+    }
+}
+
+struct MktempCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Flag(name: .short, help: "Create a directory instead of a file")
+        var d = false
+
+        @Option(name: .short, help: "Create under /tmp using PREFIX")
+        var t: String?
+
+        @Argument(help: "Optional template")
+        var template: String?
+    }
+
+    static let name = "mktemp"
+    static let overview = "Create a temporary file or directory"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        let template = resolvedTemplate(options: options)
+
+        for _ in 0..<100 {
+            let pathString = instantiate(template: template)
+            let path = context.resolvePath(pathString)
+            guard !(await context.filesystem.exists(path: path)) else {
+                continue
+            }
+
+            do {
+                if !path.dirname.isRoot {
+                    try await context.filesystem.createDirectory(path: path.dirname, recursive: true)
+                }
+
+                if options.d {
+                    try await context.filesystem.createDirectory(path: path, recursive: false)
+                } else {
+                    try await context.filesystem.writeFile(path: path, data: Data(), append: false)
+                }
+                context.writeStdout("\(path.string)\n")
+                return 0
+            } catch {
+                context.writeStderr("mktemp: \(pathString): \(error)\n")
+                return 1
+            }
+        }
+
+        context.writeStderr("mktemp: failed to create a unique temporary path\n")
+        return 1
+    }
+
+    private static func resolvedTemplate(options: Options) -> String {
+        if let prefix = options.t {
+            return "/tmp/\(prefix).XXXXXXXX"
+        }
+
+        if let template = options.template {
+            return template
+        }
+
+        return "/tmp/tmp.XXXXXXXX"
+    }
+
+    private static func instantiate(template: String) -> String {
+        let suffix = UUID().uuidString
+            .replacingOccurrences(of: "-", with: "")
+            .lowercased()
+
+        guard let lastX = template.lastIndex(of: "X") else {
+            return template + suffix.prefix(8)
+        }
+
+        var firstX = lastX
+        while firstX > template.startIndex {
+            let previous = template.index(before: firstX)
+            guard template[previous] == "X" else { break }
+            firstX = previous
+        }
+
+        let count = template.distance(from: firstX, to: template.index(after: lastX))
+        let replacement = String(suffix.prefix(max(1, count)))
+        return String(template[..<firstX]) + replacement + String(template[template.index(after: lastX)...])
     }
 }
 

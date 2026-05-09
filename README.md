@@ -295,6 +295,10 @@ Supported shell features include:
 - Globbing
 - Here-documents
 - Functions and `local`
+- Environment assignment prefixes such as `MODE=preview printenv MODE`
+- Simple sourcing with `source file` and `. file`
+- Shell options for common scripts, including `set -e` and `set -o pipefail`
+- Explicit run termination with `exit`
 - `if` / `elif` / `else`
 - `while`, `until`, `for ... in ...`, and C-style `for ((...))`
 - Path-like command invocation such as `/bin/ls`
@@ -303,6 +307,7 @@ Not supported:
 - A full bash or POSIX shell grammar
 - Host subprocess execution for ordinary commands
 - Full TTY semantics or real OS job control
+- Process substitution, brace expansion, and backtick command substitution
 - Many advanced bash compatibility edge cases
 
 ## Commands
@@ -311,11 +316,11 @@ All built-ins support `--help`, and most also support `-h`.
 
 Core built-in coverage includes:
 - File operations: `cat`, `cp`, `ln`, `ls`, `mkdir`, `mv`, `readlink`, `rm`, `rmdir`, `stat`, `touch`, `chmod`, `file`, `tree`, `diff`
-- Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `cut`, `tr`, `awk`, `sed`, `xargs`, `xxd`, `printf`, `base64`, `sha256sum`, `sha1sum`, `md5sum`
+- Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `comm`, `cut`, `tr`, `awk`, `sed`, `xargs`, `xxd`, `printf`, `base64`, `sha256sum`, `sha1sum`, `shasum`, `md5sum`
 - Data tools: `jq`, `yq`, `xan`
 - Compression and archives: `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 - Navigation and environment: `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`
-- Utilities: `clear`, `date`, `false`, `fg`, `help`, `history`, `jobs`, `kill`, `ps`, `seq`, `sleep`, `time`, `timeout`, `true`, `wait`, `whoami`, `which`
+- Utilities: `clear`, `command`, `date`, `exit`, `false`, `fg`, `help`, `history`, `jobs`, `kill`, `mktemp`, `ps`, `seq`, `set`, `sleep`, `time`, `timeout`, `true`, `wait`, `whoami`, `which`
 - Network commands: `curl`, `wget`, `html-to-markdown`
 
 Optional command sets:

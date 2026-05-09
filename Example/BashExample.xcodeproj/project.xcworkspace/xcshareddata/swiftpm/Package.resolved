@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/velos/Workspace.git",
       "state" : {
-        "branch" : "workspace-filesystem-helper",
-        "revision" : "0e0cdf4f6709e94284c275c2515e1899fee4d331"
+        "revision" : "5aa50759aef60de3e4ee0cdf6e09697470232a0e",
+        "version" : "0.4.0"
       }
     }
   ],

@@ -150,6 +150,151 @@ struct SessionIntegrationTests {
         #expect(restored.stdoutString == "value\n")
     }
 
+    @Test("environment assignment prefix is scoped to one command")
+    func environmentAssignmentPrefixIsScopedToOneCommand() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let scoped = await session.run("MODE=preview printenv MODE")
+        #expect(scoped.exitCode == 0)
+        #expect(scoped.stdoutString == "preview\n")
+
+        let restored = await session.run("printenv MODE")
+        #expect(restored.exitCode == 1)
+        #expect(restored.stdoutString.isEmpty)
+    }
+
+    @Test("environment assignment prefix supports expansion and pipelines")
+    func environmentAssignmentPrefixSupportsExpansionAndPipelines() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("export TARGET=agent")
+
+        let result = await session.run("MODE=$TARGET printenv MODE | sed 's/agent/codex/'")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "codex\n")
+
+        let target = await session.run("printenv TARGET")
+        #expect(target.exitCode == 0)
+        #expect(target.stdoutString == "agent\n")
+    }
+
+    @Test("set pipefail changes pipeline status")
+    func setPipefailChangesPipelineStatus() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let enabled = await session.run("set -euo pipefail; false | true")
+        #expect(enabled.exitCode == 1)
+
+        let disabled = await session.run("set +o pipefail; false | true")
+        #expect(disabled.exitCode == 0)
+    }
+
+    @Test("set errexit stops simple sequences after failure")
+    func setErrexitStopsSimpleSequencesAfterFailure() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let enabled = await session.run("set -e; false; echo after")
+        #expect(enabled.exitCode == 1)
+        #expect(enabled.stdoutString.isEmpty)
+
+        let orList = await session.run("false || echo recovered; echo done")
+        #expect(orList.exitCode == 0)
+        #expect(orList.stdoutString == "recovered\ndone\n")
+
+        let disabled = await session.run("set +e; false; echo after")
+        #expect(disabled.exitCode == 0)
+        #expect(disabled.stdoutString == "after\n")
+    }
+
+    @Test("exit stops the current shell run")
+    func exitStopsTheCurrentShellRun() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let explicit = await session.run("echo before; exit 7; echo after")
+        #expect(explicit.exitCode == 7)
+        #expect(explicit.stdoutString == "before\n")
+
+        let invalid = await session.run("exit nope; echo after")
+        #expect(invalid.exitCode == 2)
+        #expect(invalid.stderrString.contains("numeric argument required"))
+        #expect(invalid.stdoutString.isEmpty)
+    }
+
+    @Test("source executes file in current shell state")
+    func sourceExecutesFileInCurrentShellState() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p nested")
+        _ = await session.run("printf 'export SOURCED=value\\ncd nested\\n' > env.sh")
+
+        let result = await session.run("source env.sh; pwd; printenv SOURCED")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "/home/user/nested\nvalue\n")
+    }
+
+    @Test("dot source shorthand executes file")
+    func dotSourceShorthandExecutesFile() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'export DOT_VALUE=ok\\n' > env.sh")
+
+        let result = await session.run(". env.sh; printenv DOT_VALUE")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "ok\n")
+    }
+
+    @Test("command builtin queries and runs builtins")
+    func commandBuiltinQueriesAndRunsBuiltins() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let query = await session.run("command -v rg")
+        #expect(query.exitCode == 0)
+        #expect(query.stdoutString == "rg\n")
+
+        let run = await session.run("command echo hello")
+        #expect(run.exitCode == 0)
+        #expect(run.stdoutString == "hello\n")
+    }
+
+    @Test("comm mktemp and shasum cover logged small utility gaps")
+    func commMktempAndShasumCoverLoggedSmallUtilityGaps() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'alpha\\nbeta\\nshared\\n' > left.txt")
+        _ = await session.run("printf 'delta\\nshared\\n' > right.txt")
+
+        let common = await session.run("comm -12 left.txt right.txt")
+        #expect(common.exitCode == 0)
+        #expect(common.stdoutString == "shared\n")
+
+        let temp = await session.run("mktemp")
+        #expect(temp.exitCode == 0)
+        let tempPath = temp.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(tempPath.hasPrefix("/tmp/"))
+
+        let readTemp = await session.run("cat \(tempPath)")
+        #expect(readTemp.exitCode == 0)
+        #expect(readTemp.stdoutString.isEmpty)
+
+        _ = await session.run("printf abc > digest.txt")
+        let sha1 = await session.run("shasum digest.txt")
+        #expect(sha1.exitCode == 0)
+        #expect(sha1.stdoutString == "a9993e364706816aba3e25717850c26c9cd0d89d  digest.txt\n")
+
+        let sha256 = await session.run("shasum -a 256 digest.txt")
+        #expect(sha256.exitCode == 0)
+        #expect(sha256.stdoutString == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  digest.txt\n")
+    }
+
     @Test("command substitution writes evaluated output")
     func commandSubstitutionWritesEvaluatedOutput() async throws {
         let (session, root) = try await TestSupport.makeSession()

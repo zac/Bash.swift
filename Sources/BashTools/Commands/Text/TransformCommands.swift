@@ -228,6 +228,138 @@ struct UniqCommand: BuiltinCommand {
     }
 }
 
+struct CommCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Options and two input files")
+        var args: [String] = []
+    }
+
+    static let name = "comm"
+    static let overview = "Compare two sorted files line by line"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.args == ["--help"] || options.args == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Compare two sorted files line by line
+
+                USAGE: comm [-123] FILE1 FILE2
+
+                OPTIONS:
+                  -1      Suppress lines unique to FILE1
+                  -2      Suppress lines unique to FILE2
+                  -3      Suppress lines common to both files
+
+                """
+            )
+            return 0
+        }
+
+        var suppress1 = false
+        var suppress2 = false
+        var suppress3 = false
+        var files: [String] = []
+
+        for arg in options.args {
+            if arg.hasPrefix("-"), arg != "-", arg.dropFirst().allSatisfy({ "123".contains($0) }) {
+                for flag in arg.dropFirst() {
+                    switch flag {
+                    case "1":
+                        suppress1 = true
+                    case "2":
+                        suppress2 = true
+                    case "3":
+                        suppress3 = true
+                    default:
+                        break
+                    }
+                }
+            } else {
+                files.append(arg)
+            }
+        }
+
+        guard files.count == 2 else {
+            context.writeStderr("comm: expected two input files\n")
+            return 1
+        }
+
+        let first: [String]
+        let second: [String]
+        do {
+            first = try await readLines(path: files[0], context: &context)
+            second = try await readLines(path: files[1], context: &context)
+        } catch {
+            return 1
+        }
+
+        var i = 0
+        var j = 0
+        while i < first.count || j < second.count {
+            if i >= first.count {
+                if !suppress2 {
+                    context.writeStdout(prefix(column: 2, suppress1: suppress1, suppress2: suppress2) + second[j] + "\n")
+                }
+                j += 1
+                continue
+            }
+
+            if j >= second.count {
+                if !suppress1 {
+                    context.writeStdout(prefix(column: 1, suppress1: suppress1, suppress2: suppress2) + first[i] + "\n")
+                }
+                i += 1
+                continue
+            }
+
+            if first[i] == second[j] {
+                if !suppress3 {
+                    context.writeStdout(prefix(column: 3, suppress1: suppress1, suppress2: suppress2) + first[i] + "\n")
+                }
+                i += 1
+                j += 1
+            } else if first[i] < second[j] {
+                if !suppress1 {
+                    context.writeStdout(prefix(column: 1, suppress1: suppress1, suppress2: suppress2) + first[i] + "\n")
+                }
+                i += 1
+            } else {
+                if !suppress2 {
+                    context.writeStdout(prefix(column: 2, suppress1: suppress1, suppress2: suppress2) + second[j] + "\n")
+                }
+                j += 1
+            }
+        }
+
+        return 0
+    }
+
+    private static func readLines(path: String, context: inout CommandContext) async throws -> [String] {
+        if path == "-" {
+            return CommandIO.decodeLines(context.stdin)
+        }
+
+        do {
+            let data = try await context.filesystem.readFile(path: context.resolvePath(path))
+            return CommandIO.decodeLines(data)
+        } catch {
+            context.writeStderr("comm: \(path): \(error)\n")
+            throw error
+        }
+    }
+
+    private static func prefix(column: Int, suppress1: Bool, suppress2: Bool) -> String {
+        switch column {
+        case 1:
+            return ""
+        case 2:
+            return suppress1 ? "" : "\t"
+        default:
+            return (suppress1 ? "" : "\t") + (suppress2 ? "" : "\t")
+        }
+    }
+}
+
 struct CutCommand: BuiltinCommand {
     struct Options: ParsableArguments {
         @Option(name: .short, help: "Use DELIM instead of TAB")

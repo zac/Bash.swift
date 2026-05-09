@@ -13,6 +13,17 @@ private struct TextExpansionOutcome: Sendable {
     var failure: ExecutionFailure?
 }
 
+package enum ShellOptionKeys {
+    package static let pipefail = "__BASHSWIFT_SHELLOPT_PIPEFAIL"
+    package static let errexit = "__BASHSWIFT_SHELLOPT_ERREXIT"
+    package static let nounset = "__BASHSWIFT_SHELLOPT_NOUNSET"
+    package static let xtrace = "__BASHSWIFT_SHELLOPT_XTRACE"
+}
+
+package enum ShellInternalKeys {
+    package static let exitRequested = "__BASHSWIFT_INTERNAL_EXIT_REQUESTED"
+}
+
 package enum ShellExecutor {
     package static func execute(
         parsedLine: ParsedLine,
@@ -47,7 +58,7 @@ package enum ShellExecutor {
         var aggregateErr = Data()
         var lastExitCode: Int32 = 0
 
-        for segment in parsedLine.segments {
+        for (offset, segment) in parsedLine.segments.enumerated() {
             if let failure = await executionControl?.checkpoint() {
                 lastExitCode = failure.exitCode
                 aggregateErr.append(Data("\(failure.message)\n".utf8))
@@ -136,6 +147,21 @@ package enum ShellExecutor {
             aggregateOut.append(segmentResult.stdout)
             aggregateErr.append(segmentResult.stderr)
             lastExitCode = segmentResult.exitCode
+
+            if environment.removeValue(forKey: ShellInternalKeys.exitRequested) != nil {
+                break
+            }
+
+            let nextConnector = parsedLine.segments.indices.contains(offset + 1)
+                ? parsedLine.segments[offset + 1].connector
+                : nil
+            if shouldExitForErrexit(
+                environment: environment,
+                exitCode: lastExitCode,
+                nextConnector: nextConnector
+            ) {
+                break
+            }
         }
 
         return ShellExecutionResult(
@@ -160,6 +186,23 @@ package enum ShellExecutor {
         }
     }
 
+    private static func shouldExitForErrexit(
+        environment: [String: String],
+        exitCode: Int32,
+        nextConnector: ChainOperator?
+    ) -> Bool {
+        guard environment[ShellOptionKeys.errexit] == "1", exitCode != 0 else {
+            return false
+        }
+
+        switch nextConnector {
+        case .and, .or:
+            return false
+        case .sequence, nil:
+            return true
+        }
+    }
+
     private static func executePipeline(
         commands: [ParsedCommand],
         initialInput: Data,
@@ -181,6 +224,7 @@ package enum ShellExecutor {
         var nextInput = initialInput
         var aggregateStderr = Data()
         var lastResult = CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
+        var pipefailExitCode: Int32 = 0
 
         for command in commands {
             var commandResult = await executeSingleCommand(
@@ -203,12 +247,18 @@ package enum ShellExecutor {
             )
 
             aggregateStderr.append(commandResult.stderr)
+            if commandResult.exitCode != 0 {
+                pipefailExitCode = commandResult.exitCode
+            }
             nextInput = commandResult.stdout
             commandResult.stderr = Data()
             lastResult = commandResult
         }
 
         lastResult.stderr = aggregateStderr
+        if environment[ShellOptionKeys.pipefail] == "1", pipefailExitCode != 0 {
+            lastResult.exitCode = pipefailExitCode
+        }
         return lastResult
     }
 
@@ -309,11 +359,25 @@ package enum ShellExecutor {
             enableGlobbing: enableGlobbing
         )
 
-        guard let commandName = expandedWords.first else {
+        guard !expandedWords.isEmpty else {
             return CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
         }
 
-        let commandArgs = Array(expandedWords.dropFirst())
+        var commandWordIndex = 0
+        var scopedAssignments: [(name: String, previousValue: String?)] = []
+        while commandWordIndex < expandedWords.count,
+              let assignment = parseAssignment(expandedWords[commandWordIndex]) {
+            scopedAssignments.append((name: assignment.name, previousValue: environment[assignment.name]))
+            environment[assignment.name] = assignment.value
+            commandWordIndex += 1
+        }
+
+        guard commandWordIndex < expandedWords.count else {
+            return CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
+        }
+
+        let commandName = expandedWords[commandWordIndex]
+        let commandArgs = Array(expandedWords.dropFirst(commandWordIndex + 1))
         let commandFilesystem = ShellPermissionedFileSystem(
             base: baseFilesystem,
             commandName: commandName,
@@ -321,14 +385,42 @@ package enum ShellExecutor {
             executionControl: executionControl
         )
 
+        func restoreScopedAssignments() {
+            for assignment in scopedAssignments.reversed() {
+                if let previousValue = assignment.previousValue {
+                    environment[assignment.name] = previousValue
+                } else {
+                    environment.removeValue(forKey: assignment.name)
+                }
+            }
+        }
+
         var result: CommandResult
-        if commandArgs.isEmpty, let assignment = parseAssignment(commandName) {
-            environment[assignment.name] = assignment.value
-            result = CommandResult(stdout: Data(), stderr: Data(), exitCode: 0)
-        } else if commandName == "local" {
+        if commandName == "local" {
             result = executeLocalBuiltin(commandArgs, environment: &environment)
+        } else if commandName == "source" || commandName == "." {
+            result = await executeSourceBuiltin(
+                commandName: commandName,
+                args: commandArgs,
+                stdin: input,
+                filesystem: commandFilesystem,
+                currentDirectory: &currentDirectory,
+                environment: &environment,
+                history: history,
+                commandRegistry: commandRegistry,
+                shellFunctions: shellFunctions,
+                enableGlobbing: enableGlobbing,
+                jobControl: jobControl,
+                permissionAuthorizer: permissionAuthorizer,
+                executionControl: executionControl,
+                secretPolicy: secretPolicy,
+                secretResolver: secretResolver,
+                secretTracker: secretTracker,
+                secretOutputRedactor: secretOutputRedactor
+            )
         } else if let implementation = resolveCommand(named: commandName, registry: commandRegistry) {
             if let failure = await executionControl?.recordCommandExecution(commandName: commandName) {
+                restoreScopedAssignments()
                 return CommandResult(
                     stdout: Data(),
                     stderr: Data("\(failure.message)\n".utf8),
@@ -384,9 +476,12 @@ package enum ShellExecutor {
                 secretOutputRedactor: secretOutputRedactor
             )
         } else {
+            restoreScopedAssignments()
             let message = "\(commandName): command not found\n"
             return CommandResult(stdout: Data(), stderr: Data(message.utf8), exitCode: 127)
         }
+
+        restoreScopedAssignments()
 
         for redirection in command.redirections where redirection.type != .stdin {
             switch redirection.type {
@@ -725,6 +820,107 @@ package enum ShellExecutor {
                 environment.removeValue(forKey: name)
             }
         }
+    }
+
+    private static func executeSourceBuiltin(
+        commandName: String,
+        args: [String],
+        stdin: Data,
+        filesystem: any FileSystem,
+        currentDirectory: inout String,
+        environment: inout [String: String],
+        history: [String],
+        commandRegistry: [String: AnyBuiltinCommand],
+        shellFunctions: [String: String],
+        enableGlobbing: Bool,
+        jobControl: (any ShellJobControlling)?,
+        permissionAuthorizer: any ShellPermissionAuthorizing,
+        executionControl: ExecutionControl?,
+        secretPolicy: SecretHandlingPolicy,
+        secretResolver: (any SecretReferenceResolving)?,
+        secretTracker: SecretExposureTracker?,
+        secretOutputRedactor: any SecretOutputRedacting
+    ) async -> CommandResult {
+        if args == ["--help"] || args == ["-h"] {
+            return CommandResult(
+                stdout: Data(
+                    """
+                    OVERVIEW: Execute commands from a file in the current shell
+
+                    USAGE: \(commandName) <file>
+
+                    """.utf8
+                ),
+                stderr: Data(),
+                exitCode: 0
+            )
+        }
+
+        guard let file = args.first else {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(commandName): filename argument required\n".utf8),
+                exitCode: 2
+            )
+        }
+
+        let path = WorkspacePath(
+            normalizing: file,
+            relativeTo: WorkspacePath(normalizing: currentDirectory)
+        )
+
+        let data: Data
+        do {
+            data = try await filesystem.readFile(path: path)
+        } catch {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(commandName): \(file): \(error)\n".utf8),
+                exitCode: 1
+            )
+        }
+
+        guard let script = String(data: data, encoding: .utf8) else {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(commandName): \(file): invalid UTF-8\n".utf8),
+                exitCode: 1
+            )
+        }
+
+        let parsed: ParsedLine
+        do {
+            parsed = try ShellParser.parse(script)
+        } catch {
+            return CommandResult(
+                stdout: Data(),
+                stderr: Data("\(error)\n".utf8),
+                exitCode: 2
+            )
+        }
+
+        let execution = await execute(
+            parsedLine: parsed,
+            stdin: stdin,
+            filesystem: filesystem,
+            currentDirectory: currentDirectory,
+            environment: environment,
+            history: history,
+            commandRegistry: commandRegistry,
+            shellFunctions: shellFunctions,
+            enableGlobbing: enableGlobbing,
+            jobControl: jobControl,
+            permissionAuthorizer: permissionAuthorizer,
+            executionControl: executionControl,
+            secretPolicy: secretPolicy,
+            secretResolver: secretResolver,
+            secretTracker: secretTracker,
+            secretOutputRedactor: secretOutputRedactor
+        )
+
+        currentDirectory = execution.currentDirectory
+        environment = execution.environment
+        return execution.result
     }
 
     private static func isValidIdentifier(_ value: String) -> Bool {
