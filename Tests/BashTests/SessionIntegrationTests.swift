@@ -1628,6 +1628,74 @@ struct SessionIntegrationTests {
         #expect(xanFilter.stdoutString == "name,age,city\nbob,25,SF\n")
     }
 
+    @Test("plutil prints lints converts and replaces property lists")
+    func plutilPrintsLintsConvertsAndReplacesPropertyLists() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let write = await session.run(
+            """
+            cat > Info.plist <<'PLIST'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.example.old</string>
+              <key>CFBundleName</key>
+              <string>Bash</string>
+            </dict>
+            </plist>
+            PLIST
+            """
+        )
+        #expect(write.exitCode == 0)
+
+        let lint = await session.run("plutil -lint Info.plist")
+        #expect(lint.exitCode == 0)
+        #expect(lint.stdoutString == "Info.plist: OK\n")
+
+        let printed = await session.run("plutil -p Info.plist")
+        #expect(printed.exitCode == 0)
+        #expect(printed.stdoutString.contains("\"CFBundleName\" => \"Bash\""))
+
+        let replaceString = await session.run("plutil -replace CFBundleIdentifier -string org.python.python Info.plist")
+        #expect(replaceString.exitCode == 0)
+
+        let replaceJSON = await session.run("plutil -replace CFBundleSupportedPlatforms -json '[\"iPhoneOS\"]' Info.plist")
+        #expect(replaceJSON.exitCode == 0)
+
+        let convertJSON = await session.run("plutil -convert json -o converted.json Info.plist")
+        #expect(convertJSON.exitCode == 0)
+
+        let identifier = await session.run("jq -r '.CFBundleIdentifier' converted.json")
+        #expect(identifier.exitCode == 0)
+        #expect(identifier.stdoutString == "org.python.python\n")
+
+        let platform = await session.run("jq -r '.CFBundleSupportedPlatforms[0]' converted.json")
+        #expect(platform.exitCode == 0)
+        #expect(platform.stdoutString == "iPhoneOS\n")
+
+        let convertBinary = await session.run("plutil -convert binary1 -o Binary.plist Info.plist")
+        #expect(convertBinary.exitCode == 0)
+
+        let lintBinary = await session.run("plutil -lint Binary.plist")
+        #expect(lintBinary.exitCode == 0)
+
+        let convertXML = await session.run("plutil -convert xml1 -o XML.plist Binary.plist")
+        #expect(convertXML.exitCode == 0)
+
+        let printXML = await session.run("plutil -p XML.plist")
+        #expect(printXML.exitCode == 0)
+        #expect(printXML.stdoutString.contains("\"CFBundleIdentifier\" => \"org.python.python\""))
+
+        _ = await session.run("printf '{\"pins\":[\"abc\"],\"ok\":true}' > fingerprint.json")
+        let printJSON = await session.run("plutil -p fingerprint.json")
+        #expect(printJSON.exitCode == 0)
+        #expect(printJSON.stdoutString.contains("\"pins\""))
+        #expect(printJSON.stdoutString.contains("\"ok\" => 1"))
+    }
+
     @Test("jq and yq query engine phase 1")
     func jqAndYqQueryEnginePhase1() async throws {
         let (session, root) = try await TestSupport.makeSession()

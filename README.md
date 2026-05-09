@@ -319,7 +319,7 @@ All built-ins support `--help`, and most also support `-h`.
 Core built-in coverage includes:
 - File operations: `cat`, `cp`, `ln`, `ls`, `mkdir`, `mv`, `readlink`, `rm`, `rmdir`, `stat`, `touch`, `chmod`, `file`, `tree`, `diff`
 - Text processing: `grep`, `rg`, `head`, `tail`, `wc`, `sort`, `uniq`, `comm`, `cut`, `tr`, `awk`, `sed`, `xargs`, `xxd`, `printf`, `base64`, `sha256sum`, `sha1sum`, `shasum`, `md5sum`
-- Data tools: `jq`, `yq`, `xan`
+- Data tools: `jq`, `yq`, `xan`, `plutil`
 - Compression and archives: `gzip`, `gunzip`, `zcat`, `zip`, `unzip`, `tar`
 - Navigation and environment: `basename`, `cd`, `dirname`, `du`, `echo`, `env`, `export`, `find`, `printenv`, `pwd`, `tee`
 - Utilities: `clear`, `command`, `date`, `exit`, `false`, `fg`, `help`, `history`, `jobs`, `kill`, `mktemp`, `ps`, `seq`, `set`, `sleep`, `time`, `timeout`, `true`, `wait`, `whoami`, `which`

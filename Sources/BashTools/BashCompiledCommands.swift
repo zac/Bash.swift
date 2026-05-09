@@ -79,6 +79,7 @@ package enum BashCompiledCommands {
             builtin(JqCommand.self),
             builtin(YqCommand.self),
             builtin(XanCommand.self),
+            builtin(PlutilCommand.self),
             builtin(BasenameCommand.self),
             builtin(CdCommand.self),
             builtin(DirnameCommand.self),
