@@ -293,7 +293,9 @@ Supported shell features include:
 - Command substitution: `$(...)`
 - Variables and default expansion: `$VAR`, `${VAR}`, `${VAR:-default}`, `$!`
 - Globbing
+- Brace expansion for comma lists and simple numeric/alpha ranges, such as `{a,b}` and `{1..3}`
 - Here-documents
+- Input process substitution with `<(...)`, materialized as a temporary file
 - Functions and `local`
 - Environment assignment prefixes such as `MODE=preview printenv MODE`
 - Simple sourcing with `source file` and `. file`
@@ -307,7 +309,7 @@ Not supported:
 - A full bash or POSIX shell grammar
 - Host subprocess execution for ordinary commands
 - Full TTY semantics or real OS job control
-- Process substitution, brace expansion, and backtick command substitution
+- Output process substitution with `>(...)` and backtick command substitution
 - Many advanced bash compatibility edge cases
 
 ## Commands

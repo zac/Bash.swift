@@ -828,6 +828,63 @@ struct SessionIntegrationTests {
         #expect(words.contains("/home/user/b.txt"))
     }
 
+    @Test("brace expansion supports comma and simple ranges")
+    func braceExpansionSupportsCommaAndSimpleRanges() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("echo file{A,B}.txt n{1..3} {c..a}")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "fileA.txt fileB.txt n1 n2 n3 c b a\n")
+
+        let fallback = await session.run("echo ${MISSING:-fallback}")
+        #expect(fallback.exitCode == 0)
+        #expect(fallback.stdoutString == "fallback\n")
+    }
+
+    @Test("brace expansion feeds for loop values")
+    func braceExpansionFeedsForLoopValues() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("for i in item{1..3}; do echo $i; done")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "item1\nitem2\nitem3\n")
+    }
+
+    @Test("input process substitution materializes command output")
+    func inputProcessSubstitutionMaterializesCommandOutput() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'beta\\nalpha\\nshared\\n' > left.txt")
+        _ = await session.run("printf 'shared\\ngamma\\nalpha\\n' > right.txt")
+
+        let result = await session.run("comm -12 <(sort left.txt) <(sort right.txt)")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "alpha\nshared\n")
+    }
+
+    @Test("input process substitution can feed stdin redirection")
+    func inputProcessSubstitutionCanFeedStdinRedirection() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("cat < <(printf 'via-redir\\n')")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "via-redir\n")
+    }
+
+    @Test("output process substitution remains unsupported")
+    func outputProcessSubstitutionRemainsUnsupported() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("echo hi > >(cat)")
+        #expect(result.exitCode == 2)
+        #expect(result.stderrString.contains("output process substitution"))
+    }
+
     @Test("history formatting")
     func historyCommandFormatsEntries() async throws {
         let (session, root) = try await TestSupport.makeSession()

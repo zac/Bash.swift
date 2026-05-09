@@ -216,6 +216,35 @@ tasks:
       - test "$(cat after.txt)" = "unset"
     tags: [variables, environment, assignment-prefix]
 
+  - id: core.shell.brace_expansion
+    tier: core
+    prompt: |
+      Use brace expansion to create `report.md`, `report.txt`, `part1.log`, `part2.log`, and `part3.log`.
+    setup:
+      - rm -f report.md report.txt part1.log part2.log part3.log
+    validate:
+      - test -f report.md
+      - test -f report.txt
+      - test -f part1.log
+      - test -f part2.log
+      - test -f part3.log
+    tags: [brace-expansion, shell-language]
+
+  - id: core.shell.input_process_substitution
+    tier: core
+    prompt: |
+      `left.txt` and `right.txt` are unsorted.
+      Use input process substitution to sort both files before comparing them, then write only common lines to `common.txt`.
+    setup:
+      - rm -f left.txt right.txt common.txt
+      - printf 'beta\nalpha\nshared\n' > left.txt
+      - printf 'shared\ngamma\nalpha\n' > right.txt
+    validate:
+      - test "$(sed -n '1p' common.txt)" = "alpha"
+      - test "$(sed -n '2p' common.txt)" = "shared"
+      - test "$(wc -l < common.txt | tr -d ' ')" = "2"
+    tags: [process-substitution, comm, sort]
+
   - id: core.shell.source_file_state
     tier: core
     prompt: |

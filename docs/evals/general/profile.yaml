@@ -80,6 +80,8 @@ command_cross_section:
     - redirections
     - command_chains
     - environment_assignment_prefix
+    - brace_expansion
+    - input_process_substitution
     - source
     - set_errexit
     - pipefail

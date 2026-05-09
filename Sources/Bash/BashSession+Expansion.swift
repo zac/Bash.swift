@@ -717,16 +717,43 @@ extension BashSession {
         _ word: ShellWord,
         environment: [String: String]
     ) -> String {
-        var output = ""
+        expandWordVariants(word, environment: environment).joined(separator: " ")
+    }
+
+    static func expandWordValues(
+        _ word: ShellWord,
+        environment: [String: String]
+    ) -> [String] {
+        expandWordVariants(word, environment: environment)
+    }
+
+    private static func expandWordVariants(
+        _ word: ShellWord,
+        environment: [String: String]
+    ) -> [String] {
+        var variants = [""]
         for part in word.parts {
+            let partValues: [String]
             switch part.quote {
             case .single:
-                output.append(part.text)
-            case .none, .double:
-                output.append(expandVariables(in: part.text, environment: environment))
+                partValues = [part.text]
+            case .double:
+                partValues = [expandVariables(in: part.text, environment: environment)]
+            case .none:
+                partValues = BraceExpansion.expand(part.text).map {
+                    expandVariables(in: $0, environment: environment)
+                }
             }
+
+            var combined: [String] = []
+            for prefix in variants {
+                for value in partValues {
+                    combined.append(prefix + value)
+                }
+            }
+            variants = combined
         }
-        return output
+        return variants
     }
 
     static func expandVariables(

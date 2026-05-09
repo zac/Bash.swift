@@ -1221,7 +1221,7 @@ extension BashSession {
             guard case let .word(word) = token else {
                 throw ShellError.parserError("for: unsupported loop value syntax")
             }
-            values.append(expandWord(word, environment: environment))
+            values.append(contentsOf: expandWordValues(word, environment: environment))
         }
         return values
     }

@@ -54,6 +54,12 @@
     "MODE=preview printenv MODE > scoped.txt",
     "printenv MODE > after.txt || echo unset > after.txt"
   ],
+  "core.shell.brace_expansion": [
+    "touch report.{md,txt} part{1..3}.log"
+  ],
+  "core.shell.input_process_substitution": [
+    "comm -12 <(sort left.txt) <(sort right.txt) > common.txt"
+  ],
   "core.shell.source_file_state": [
     "source env.sh; pwd > sourced.txt; printenv SOURCED_VALUE >> sourced.txt"
   ],
