@@ -129,6 +129,19 @@ tasks:
       - test "$(wc -l < unique.txt | tr -d ' ')" = "3"
     tags: [cut, sort, uniq]
 
+  - id: core.text.comm_common_lines
+    tier: core
+    prompt: |
+      `left.txt` and `right.txt` are sorted files.
+      Write only the lines common to both files into `common.txt`.
+    setup:
+      - rm -f left.txt right.txt common.txt
+      - printf 'alpha\nbeta\nshared\n' > left.txt
+      - printf 'delta\nshared\n' > right.txt
+    validate:
+      - test "$(cat common.txt)" = "shared"
+    tags: [comm, text]
+
   - id: core.text.tr_uppercase
     tier: core
     prompt: |
@@ -189,6 +202,85 @@ tasks:
     validate:
       - test "$(cat default.txt)" = "default_value"
     tags: [variables, expansion]
+
+  - id: core.shell.env_assignment_prefix
+    tier: core
+    prompt: |
+      Use an environment assignment prefix so only a single `printenv` sees `MODE=preview`.
+      Save that output to `scoped.txt`.
+      Then run a separate `printenv MODE`; if it is unset, write `unset` to `after.txt`.
+    setup:
+      - rm -f scoped.txt after.txt
+    validate:
+      - test "$(cat scoped.txt)" = "preview"
+      - test "$(cat after.txt)" = "unset"
+    tags: [variables, environment, assignment-prefix]
+
+  - id: core.shell.brace_expansion
+    tier: core
+    prompt: |
+      Use brace expansion to create `report.md`, `report.txt`, `part1.log`, `part2.log`, and `part3.log`.
+    setup:
+      - rm -f report.md report.txt part1.log part2.log part3.log
+    validate:
+      - test -f report.md
+      - test -f report.txt
+      - test -f part1.log
+      - test -f part2.log
+      - test -f part3.log
+    tags: [brace-expansion, shell-language]
+
+  - id: core.shell.input_process_substitution
+    tier: core
+    prompt: |
+      `left.txt` and `right.txt` are unsorted.
+      Use input process substitution to sort both files before comparing them, then write only common lines to `common.txt`.
+    setup:
+      - rm -f left.txt right.txt common.txt
+      - printf 'beta\nalpha\nshared\n' > left.txt
+      - printf 'shared\ngamma\nalpha\n' > right.txt
+    validate:
+      - test "$(sed -n '1p' common.txt)" = "alpha"
+      - test "$(sed -n '2p' common.txt)" = "shared"
+      - test "$(wc -l < common.txt | tr -d ' ')" = "2"
+    tags: [process-substitution, comm, sort]
+
+  - id: core.shell.source_file_state
+    tier: core
+    prompt: |
+      Source `env.sh` so that it changes the current shell directory and exports `SOURCED_VALUE`.
+      Write the resulting current directory to the first line of `sourced.txt` and `SOURCED_VALUE` to the second line.
+    setup:
+      - rm -rf sourced-dir env.sh sourced.txt
+      - mkdir -p sourced-dir
+      - printf 'export SOURCED_VALUE=from_file\ncd sourced-dir\n' > env.sh
+    validate:
+      - test "$(sed -n '1p' sourced.txt)" = "$(pwd)/sourced-dir"
+      - test "$(sed -n '2p' sourced.txt)" = "from_file"
+    tags: [source, variables, cd]
+
+  - id: core.shell.set_pipefail
+    tier: core
+    prompt: |
+      Enable `pipefail`, run a pipeline where `false` is on the left and `true` is on the right,
+      and write `failed` to `pipefail.txt` only if the pipeline reports failure.
+    setup:
+      - rm -f pipefail.txt
+    validate:
+      - test "$(cat pipefail.txt)" = "failed"
+    tags: [set, pipefail, pipeline]
+
+  - id: core.shell.exit_stops_sequence
+    tier: core
+    prompt: |
+      In one shell command, write `before` to `before.txt`, then call `exit 0`,
+      then include a later command that would write `after.txt` if it ran.
+    setup:
+      - rm -f before.txt after.txt
+    validate:
+      - test "$(cat before.txt)" = "before"
+      - test ! -e after.txt
+    tags: [exit, shell-language]
 
   - id: core.shell.glob_concat
     tier: core
@@ -277,6 +369,17 @@ tasks:
       - expected="$(sha256sum input.txt | awk '{print $1}')"; test "$(cat hash.txt)" = "$expected"
     tags: [sha256sum, hashing]
 
+  - id: core.hash.shasum_sha1_file
+    tier: core
+    prompt: |
+      Compute the SHA-1 hash of `input.txt` using `shasum` and write only the hex digest to `sha1.txt`.
+    setup:
+      - rm -f input.txt sha1.txt
+      - printf 'hash-me\n' > input.txt
+    validate:
+      - expected="$(shasum input.txt | awk '{print $1}')"; test "$(cat sha1.txt)" = "$expected"
+    tags: [shasum, hashing]
+
   - id: core.data.jq_filter_projection
     tier: core
     prompt: |
@@ -321,6 +424,18 @@ tasks:
     validate:
       - code="$(cat timeout_exit.txt)"; test "$code" -gt 0
     tags: [timeout, sleep]
+
+  - id: core.utility.mktemp_file
+    tier: core
+    prompt: |
+      Use `mktemp` to create a temporary file.
+      Save the temporary path in `temp_path.txt`, then write `created` into that temporary file.
+    setup:
+      - rm -f temp_path.txt
+    validate:
+      - path="$(cat temp_path.txt)"; test -f "$path"
+      - path="$(cat temp_path.txt)"; test "$(cat "$path")" = "created"
+    tags: [mktemp, utility]
 
   - id: probe.command.wget_present
     tier: gap-probe

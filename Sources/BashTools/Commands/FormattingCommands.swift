@@ -407,6 +407,71 @@ struct Sha1sumCommand: BuiltinCommand {
     }
 }
 
+struct ShasumCommand: BuiltinCommand {
+    struct Options: ParsableArguments {
+        @Argument(parsing: .captureForPassthrough, help: "Options and optional files")
+        var args: [String] = []
+    }
+
+    static let name = "shasum"
+    static let overview = "Compute SHA message digest"
+
+    static func run(context: inout CommandContext, options: Options) async -> Int32 {
+        if options.args == ["--help"] || options.args == ["-h"] {
+            context.writeStdout(
+                """
+                OVERVIEW: Compute SHA message digest
+
+                USAGE: shasum [-a 1|256] [file...]
+
+                """
+            )
+            return 0
+        }
+
+        var algorithm = "1"
+        var files: [String] = []
+        var index = 0
+
+        while index < options.args.count {
+            let arg = options.args[index]
+            if arg == "-a" || arg == "--algorithm" {
+                guard index + 1 < options.args.count else {
+                    context.writeStderr("shasum: option requires an argument -- a\n")
+                    return 1
+                }
+                algorithm = options.args[index + 1]
+                index += 2
+                continue
+            }
+
+            if arg.hasPrefix("-a"), arg.count > 2 {
+                algorithm = String(arg.dropFirst(2))
+                index += 1
+                continue
+            }
+
+            if arg == "-b" || arg == "--binary" || arg == "-t" || arg == "--text" {
+                index += 1
+                continue
+            }
+
+            files.append(arg)
+            index += 1
+        }
+
+        switch algorithm {
+        case "1":
+            return await DigestCommandRunner.run(command: name, context: &context, files: files, digest: CommandHash.sha1)
+        case "256":
+            return await DigestCommandRunner.run(command: name, context: &context, files: files, digest: CommandHash.sha256)
+        default:
+            context.writeStderr("shasum: unsupported algorithm '\(algorithm)'\n")
+            return 1
+        }
+    }
+}
+
 struct Md5sumCommand: BuiltinCommand {
     struct Options: ParsableArguments {
         @Argument(help: "Optional files")

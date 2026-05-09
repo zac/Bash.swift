@@ -59,6 +59,7 @@ command_cross_section:
     - tr
     - sort
     - uniq
+    - comm
     - head
     - tail
     - wc
@@ -73,12 +74,26 @@ command_cross_section:
     - unzip
     - base64
     - sha256sum
+    - shasum
   shell_language:
     - pipes
     - redirections
     - command_chains
+    - environment_assignment_prefix
+    - brace_expansion
+    - input_process_substitution
+    - source
+    - set_errexit
+    - pipefail
     - variable_expansion
+    - heredocs
     - globbing
+    - control_flow
+  utilities:
+    - command
+    - exit
+    - mktemp
+    - set
 
 failure_buckets:
   - missing-command

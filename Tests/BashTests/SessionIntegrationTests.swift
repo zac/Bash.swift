@@ -150,6 +150,151 @@ struct SessionIntegrationTests {
         #expect(restored.stdoutString == "value\n")
     }
 
+    @Test("environment assignment prefix is scoped to one command")
+    func environmentAssignmentPrefixIsScopedToOneCommand() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let scoped = await session.run("MODE=preview printenv MODE")
+        #expect(scoped.exitCode == 0)
+        #expect(scoped.stdoutString == "preview\n")
+
+        let restored = await session.run("printenv MODE")
+        #expect(restored.exitCode == 1)
+        #expect(restored.stdoutString.isEmpty)
+    }
+
+    @Test("environment assignment prefix supports expansion and pipelines")
+    func environmentAssignmentPrefixSupportsExpansionAndPipelines() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("export TARGET=agent")
+
+        let result = await session.run("MODE=$TARGET printenv MODE | sed 's/agent/codex/'")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "codex\n")
+
+        let target = await session.run("printenv TARGET")
+        #expect(target.exitCode == 0)
+        #expect(target.stdoutString == "agent\n")
+    }
+
+    @Test("set pipefail changes pipeline status")
+    func setPipefailChangesPipelineStatus() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let enabled = await session.run("set -euo pipefail; false | true")
+        #expect(enabled.exitCode == 1)
+
+        let disabled = await session.run("set +o pipefail; false | true")
+        #expect(disabled.exitCode == 0)
+    }
+
+    @Test("set errexit stops simple sequences after failure")
+    func setErrexitStopsSimpleSequencesAfterFailure() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let enabled = await session.run("set -e; false; echo after")
+        #expect(enabled.exitCode == 1)
+        #expect(enabled.stdoutString.isEmpty)
+
+        let orList = await session.run("false || echo recovered; echo done")
+        #expect(orList.exitCode == 0)
+        #expect(orList.stdoutString == "recovered\ndone\n")
+
+        let disabled = await session.run("set +e; false; echo after")
+        #expect(disabled.exitCode == 0)
+        #expect(disabled.stdoutString == "after\n")
+    }
+
+    @Test("exit stops the current shell run")
+    func exitStopsTheCurrentShellRun() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let explicit = await session.run("echo before; exit 7; echo after")
+        #expect(explicit.exitCode == 7)
+        #expect(explicit.stdoutString == "before\n")
+
+        let invalid = await session.run("exit nope; echo after")
+        #expect(invalid.exitCode == 2)
+        #expect(invalid.stderrString.contains("numeric argument required"))
+        #expect(invalid.stdoutString.isEmpty)
+    }
+
+    @Test("source executes file in current shell state")
+    func sourceExecutesFileInCurrentShellState() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("mkdir -p nested")
+        _ = await session.run("printf 'export SOURCED=value\\ncd nested\\n' > env.sh")
+
+        let result = await session.run("source env.sh; pwd; printenv SOURCED")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "/home/user/nested\nvalue\n")
+    }
+
+    @Test("dot source shorthand executes file")
+    func dotSourceShorthandExecutesFile() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'export DOT_VALUE=ok\\n' > env.sh")
+
+        let result = await session.run(". env.sh; printenv DOT_VALUE")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "ok\n")
+    }
+
+    @Test("command builtin queries and runs builtins")
+    func commandBuiltinQueriesAndRunsBuiltins() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let query = await session.run("command -v rg")
+        #expect(query.exitCode == 0)
+        #expect(query.stdoutString == "rg\n")
+
+        let run = await session.run("command echo hello")
+        #expect(run.exitCode == 0)
+        #expect(run.stdoutString == "hello\n")
+    }
+
+    @Test("comm mktemp and shasum cover logged small utility gaps")
+    func commMktempAndShasumCoverLoggedSmallUtilityGaps() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'alpha\\nbeta\\nshared\\n' > left.txt")
+        _ = await session.run("printf 'delta\\nshared\\n' > right.txt")
+
+        let common = await session.run("comm -12 left.txt right.txt")
+        #expect(common.exitCode == 0)
+        #expect(common.stdoutString == "shared\n")
+
+        let temp = await session.run("mktemp")
+        #expect(temp.exitCode == 0)
+        let tempPath = temp.stdoutString.trimmingCharacters(in: .whitespacesAndNewlines)
+        #expect(tempPath.hasPrefix("/tmp/"))
+
+        let readTemp = await session.run("cat \(tempPath)")
+        #expect(readTemp.exitCode == 0)
+        #expect(readTemp.stdoutString.isEmpty)
+
+        _ = await session.run("printf abc > digest.txt")
+        let sha1 = await session.run("shasum digest.txt")
+        #expect(sha1.exitCode == 0)
+        #expect(sha1.stdoutString == "a9993e364706816aba3e25717850c26c9cd0d89d  digest.txt\n")
+
+        let sha256 = await session.run("shasum -a 256 digest.txt")
+        #expect(sha256.exitCode == 0)
+        #expect(sha256.stdoutString == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad  digest.txt\n")
+    }
+
     @Test("command substitution writes evaluated output")
     func commandSubstitutionWritesEvaluatedOutput() async throws {
         let (session, root) = try await TestSupport.makeSession()
@@ -681,6 +826,63 @@ struct SessionIntegrationTests {
         #expect(words.count == 2)
         #expect(words.contains("/home/user/a.txt"))
         #expect(words.contains("/home/user/b.txt"))
+    }
+
+    @Test("brace expansion supports comma and simple ranges")
+    func braceExpansionSupportsCommaAndSimpleRanges() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("echo file{A,B}.txt n{1..3} {c..a}")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "fileA.txt fileB.txt n1 n2 n3 c b a\n")
+
+        let fallback = await session.run("echo ${MISSING:-fallback}")
+        #expect(fallback.exitCode == 0)
+        #expect(fallback.stdoutString == "fallback\n")
+    }
+
+    @Test("brace expansion feeds for loop values")
+    func braceExpansionFeedsForLoopValues() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("for i in item{1..3}; do echo $i; done")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "item1\nitem2\nitem3\n")
+    }
+
+    @Test("input process substitution materializes command output")
+    func inputProcessSubstitutionMaterializesCommandOutput() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        _ = await session.run("printf 'beta\\nalpha\\nshared\\n' > left.txt")
+        _ = await session.run("printf 'shared\\ngamma\\nalpha\\n' > right.txt")
+
+        let result = await session.run("comm -12 <(sort left.txt) <(sort right.txt)")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "alpha\nshared\n")
+    }
+
+    @Test("input process substitution can feed stdin redirection")
+    func inputProcessSubstitutionCanFeedStdinRedirection() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("cat < <(printf 'via-redir\\n')")
+        #expect(result.exitCode == 0)
+        #expect(result.stdoutString == "via-redir\n")
+    }
+
+    @Test("output process substitution remains unsupported")
+    func outputProcessSubstitutionRemainsUnsupported() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let result = await session.run("echo hi > >(cat)")
+        #expect(result.exitCode == 2)
+        #expect(result.stderrString.contains("output process substitution"))
     }
 
     @Test("history formatting")
@@ -1424,6 +1626,74 @@ struct SessionIntegrationTests {
         let xanFilter = await session.run("xan filter city SF people.csv")
         #expect(xanFilter.exitCode == 0)
         #expect(xanFilter.stdoutString == "name,age,city\nbob,25,SF\n")
+    }
+
+    @Test("plutil prints lints converts and replaces property lists")
+    func plutilPrintsLintsConvertsAndReplacesPropertyLists() async throws {
+        let (session, root) = try await TestSupport.makeSession()
+        defer { TestSupport.removeDirectory(root) }
+
+        let write = await session.run(
+            """
+            cat > Info.plist <<'PLIST'
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+            <plist version="1.0">
+            <dict>
+              <key>CFBundleIdentifier</key>
+              <string>com.example.old</string>
+              <key>CFBundleName</key>
+              <string>Bash</string>
+            </dict>
+            </plist>
+            PLIST
+            """
+        )
+        #expect(write.exitCode == 0)
+
+        let lint = await session.run("plutil -lint Info.plist")
+        #expect(lint.exitCode == 0)
+        #expect(lint.stdoutString == "Info.plist: OK\n")
+
+        let printed = await session.run("plutil -p Info.plist")
+        #expect(printed.exitCode == 0)
+        #expect(printed.stdoutString.contains("\"CFBundleName\" => \"Bash\""))
+
+        let replaceString = await session.run("plutil -replace CFBundleIdentifier -string org.python.python Info.plist")
+        #expect(replaceString.exitCode == 0)
+
+        let replaceJSON = await session.run("plutil -replace CFBundleSupportedPlatforms -json '[\"iPhoneOS\"]' Info.plist")
+        #expect(replaceJSON.exitCode == 0)
+
+        let convertJSON = await session.run("plutil -convert json -o converted.json Info.plist")
+        #expect(convertJSON.exitCode == 0)
+
+        let identifier = await session.run("jq -r '.CFBundleIdentifier' converted.json")
+        #expect(identifier.exitCode == 0)
+        #expect(identifier.stdoutString == "org.python.python\n")
+
+        let platform = await session.run("jq -r '.CFBundleSupportedPlatforms[0]' converted.json")
+        #expect(platform.exitCode == 0)
+        #expect(platform.stdoutString == "iPhoneOS\n")
+
+        let convertBinary = await session.run("plutil -convert binary1 -o Binary.plist Info.plist")
+        #expect(convertBinary.exitCode == 0)
+
+        let lintBinary = await session.run("plutil -lint Binary.plist")
+        #expect(lintBinary.exitCode == 0)
+
+        let convertXML = await session.run("plutil -convert xml1 -o XML.plist Binary.plist")
+        #expect(convertXML.exitCode == 0)
+
+        let printXML = await session.run("plutil -p XML.plist")
+        #expect(printXML.exitCode == 0)
+        #expect(printXML.stdoutString.contains("\"CFBundleIdentifier\" => \"org.python.python\""))
+
+        _ = await session.run("printf '{\"pins\":[\"abc\"],\"ok\":true}' > fingerprint.json")
+        let printJSON = await session.run("plutil -p fingerprint.json")
+        #expect(printJSON.exitCode == 0)
+        #expect(printJSON.stdoutString.contains("\"pins\""))
+        #expect(printJSON.stdoutString.contains("\"ok\" => 1"))
     }
 
     @Test("jq and yq query engine phase 1")

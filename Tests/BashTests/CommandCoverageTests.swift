@@ -6,11 +6,11 @@ import Testing
 struct CommandCoverageTests {
     private let commands = [
         "cat", "cp", "ln", "ls", "mkdir", "mv", "readlink", "rm", "rmdir", "stat", "touch", "chmod", "file", "tree", "diff",
-        "grep", "egrep", "fgrep", "rg", "head", "tail", "nl", "wc", "sort", "uniq", "cut", "tr", "awk", "sed", "xargs", "xxd", "printf", "base64", "sha256sum", "sha1sum", "md5sum",
+        "grep", "egrep", "fgrep", "rg", "head", "tail", "nl", "wc", "sort", "uniq", "comm", "cut", "tr", "awk", "sed", "xargs", "xxd", "printf", "base64", "sha256sum", "sha1sum", "shasum", "md5sum",
         "gzip", "gunzip", "zcat", "zip", "unzip", "tar",
-        "jq", "yq", "xan",
+        "jq", "yq", "xan", "plutil",
         "basename", "cd", "dirname", "du", "echo", "env", "export", "find", "printenv", "pwd", "tee",
-        "curl", "wget", "html-to-markdown", "clear", "date", "hostname", "false", "whoami", "help", "history", "jobs", "fg", "wait", "ps", "kill", "seq", "sleep", "time", "timeout", "true", "which",
+        "curl", "wget", "html-to-markdown", "clear", "date", "hostname", "false", "whoami", "help", "history", "set", "command", "exit", "jobs", "fg", "wait", "ps", "kill", "seq", "sleep", "time", "timeout", "mktemp", "true", "which",
     ]
 
     @Test("all builtins support --help")

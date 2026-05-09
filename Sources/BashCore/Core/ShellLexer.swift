@@ -171,6 +171,13 @@ package enum ShellLexer {
             }
 
             if currentQuote == .none,
+               let processSubstitution = try ProcessSubstitutionSyntax.capture(in: input, from: i) {
+                currentPart.append(processSubstitution.raw)
+                i = processSubstitution.endIndex
+                continue
+            }
+
+            if currentQuote == .none,
                let opToken = try readOperator(input: input, index: &i, currentWordIsEmpty: parts.isEmpty && currentPart.isEmpty) {
                 flushWord()
                 tokens.append(opToken)
